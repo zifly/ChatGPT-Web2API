@@ -8,6 +8,19 @@ if [ ! -s /run/secrets/vnc-password ]; then
 fi
 umask 077
 x11vnc -storepasswd "$(cat /run/secrets/vnc-password)" /tmp/vnc.pass >/dev/null 2>&1
+# Docker restarts retain /tmp, but the old X server process is gone.
+# Never remove a lock belonging to a still-running Xvfb process.
+if [ -f /tmp/.X99-lock ]; then
+    xpid=$(tr -d '[:space:]' < /tmp/.X99-lock)
+    case "$xpid" in
+        ''|*[!0-9]*) ;;
+        *) if kill -0 "$xpid" 2>/dev/null && [ "$(cat "/proc/$xpid/comm" 2>/dev/null)" = Xvfb ]; then
+               echo "Display :99 still belongs to a live Xvfb process" >&2
+               exit 1
+           fi ;;
+    esac
+fi
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
 for i in $(seq 1 30); do
     if xdpyinfo -display :99 >/dev/null 2>&1; then break; fi

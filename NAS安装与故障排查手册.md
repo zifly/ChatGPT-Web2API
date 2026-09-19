@@ -17,6 +17,32 @@ cp .env.example .env
 需要代理时设置 W2A_PROXY_URL，填真实的 HTTP 代理端口，不要混用 SOCKS 端口。
 代理在 NAS 本机时可用 host.docker.internal，且代理应允许容器网络连接。
 
+### 构建镜像源和代理
+
+默认使用 Debian、Debian Security 和 PyPI 官方源，不启用构建或运行代理；Chrome 来自 Google 官方签名仓库。
+可在 `.env` 中通过 `W2A_DEBIAN_MIRROR`、`W2A_DEBIAN_SECURITY_MIRROR`、`W2A_PIP_INDEX_URL` 更换镜像。
+安全更新默认保持官方源。可选镜像可能存在同步延迟。
+
+中国大陆网络可参考以下可选配置，按需写入本地 `.env`。镜像与代理是独立开关，换源不会自动解决 ChatGPT 的访问问题：
+
+```dotenv
+W2A_DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+W2A_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 如需安全更新镜像，再取消下面一行注释：
+# W2A_DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
+# 如需代理，填写你自己的可达 HTTP 代理地址：
+# W2A_BUILD_PROXY_URL=http://host.docker.internal:3128
+# W2A_PROXY_URL=http://host.docker.internal:3128
+```
+
+`W2A_PROXY_URL` 配置运行时浏览器/服务代理；构建下载需要另设 `W2A_BUILD_PROXY_URL`。
+容器内的 127.0.0.1 不是宿主机。代理在宿主机时，可用 `http://host.docker.internal:实际HTTP端口`，并确认代理允许容器访问。
+构建代理不要填写账号密码；这些配置留在本地 `.env`，不提交到仓库。
+
+若失败发生在 `FROM python:...` 的 Docker Hub 拉取阶段，说明尚未运行构建步骤，需要检查 Docker 守护进程或 Docker Desktop 的代理。`W2A_BUILD_PROXY_URL` 不负责基础镜像拉取。
+
+清华配置依据：[Debian 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/debian/) · [PyPI 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)。
+
 创建 `data/api.env`，填入自己生成的长随机密钥：
 
 ```text
@@ -35,6 +61,7 @@ sudo sh scripts/enable-nas-desktop.sh
 脚本先构建基础镜像再构建桌面镜像。构建失败时查看终端及本机 desktop-build.log。
 打开 `http://192.168.1.100:6080/vnc.html`，输入 VNC 密码，在浏览器里完成 ChatGPT 登录。
 Chrome 同步登录和 ChatGPT 网站登录不同；网站可用时不必因同步提示而退出账号。
+桌面配置默认设置 `W2A_LOGIN_TIMEOUT_SECONDS=0`（可在 `.env` 改为正整数秒数），表示持续等待人工登录。登录前 API 尚未就绪；桌面页面可用不等于聊天 API 已就绪。
 
 可选：将自己的 Cookie-Editor JSON 放到 `data/cookies/cookies.json`。启动时存在就会导入；旧 Cookie 可能覆盖新状态。
 不要分享 Cookie 或 chrome-profile，也不要让多个 Chrome 共用同一个 profile。
@@ -87,4 +114,14 @@ sudo docker compose -f compose.yaml -f compose.headed.yaml up -d --no-build
 
 当前 REST API 为文本接口，无图片和原文件上传。流式、多客户端及长期稳定性未在此 NAS 验收。
 网页读取兜底有回归测试，但尚未单独完成 NAS 实机验收。关闭客户端重试不代表服务内部不会重试。
-公开版调整了镜像名称与配置变量，需要在新部署环境验证构建和登录；不保证开箱即用。
+独立安装验收见下一节；不同宿主机和网络仍需验证。
+
+
+## 7. 独立安装验收记录（2026-09-20）
+
+在 Windows Docker Desktop 的 Linux/amd64 环境，从公开仓库重新克隆，以空 profile 和独立测试密钥构建；未复制原 NAS 的登录数据。
+换用清华 Debian/PyPI 镜像并分别配置构建与运行代理后，两层镜像及安装脚本运行成功。
+首次人工登录等待和虚拟桌面残留锁问题已修复，实际重启后 noVNC 与 Chrome CDP 均可访问。
+人工登录后，模型目录返回21项；仅发送一次 auto、stream=false 的最小聊天请求，API 正文返回 OK，随后健康检查通过。
+
+此结果验证上述本机容器环境，不能替代其他 NAS 的实机兼容性测试。未验证流式、多客户端或长时间稳定性。

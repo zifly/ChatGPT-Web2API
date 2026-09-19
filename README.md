@@ -26,11 +26,13 @@ sudo sh scripts/enable-nas-desktop.sh
 ```
 
 The script builds both images. Listeners default to loopback until W2A_BIND_ADDRESS is explicitly configured.
+Official Debian/PyPI sources and no proxy are the defaults. Optional mainland-China mirror/proxy examples are in the Chinese setup guide and `.env.example`; each setting is independent. Desktop mode waits for manual login without a five-minute timeout by default, and handles stale Xvfb locks on restart.
+
 No keys, cookies, Chrome profiles, VNC passwords or runtime logs are distributed.
 
 ## Validation / 验证范围
 
-Non-streaming text with model auto was verified on one amd64 NAS. The public configuration changes still need a fresh deployment test. No claim of ARM support, universal compatibility or continuous availability.
+Non-streaming text with model auto was verified on one amd64 NAS. An independent Linux/amd64 Docker Desktop installation was also built and started with optional TUNA mirrors and a proxy; after manual login, one non-streaming API test returned OK. Desktop restart was verified. The official-source path previously encountered network download failures and has not completed the same fresh-install acceptance. No claim of ARM support, universal compatibility or continuous availability.
 
 Images and original file uploads are not supported by this REST API. Streaming and multi-client operation have not been accepted on this NAS. The guarded DOM fallback has regression tests but has not been separately verified live.
 
