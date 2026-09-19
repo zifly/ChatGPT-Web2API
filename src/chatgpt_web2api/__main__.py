@@ -36,7 +36,7 @@ def inject_cookies(args) -> None:
         sys.exit(1)
 
     # Load cookies from file
-    with open(cookie_file) as f:
+    with open(cookie_file, encoding="utf-8-sig") as f:
         data = json.load(f)
 
     # Support both arrays and Netscape format
@@ -71,15 +71,15 @@ def inject_cookies(args) -> None:
         ws_url = pages[0]["webSocketDebuggerUrl"]
         ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
 
-        # Navigate to chatgpt.com first
-        await ws.send(
-            json.dumps(
-                {"id": 1, "method": "Page.navigate", "params": {"url": "https://chatgpt.com/"}}
-            )
-        )
         import asyncio as aio
 
-        await aio.sleep(3)
+        async def command(request_id, method, params):
+            await ws.send(json.dumps({"id": request_id, "method": method, "params": params}))
+            async with aio.timeout(15):
+                while True:
+                    response = json.loads(await ws.recv())
+                    if response.get("id") == request_id:
+                        return response
 
         # Set cookies via CDP
         for i, cookie in enumerate(cookies):
@@ -91,27 +91,34 @@ def inject_cookies(args) -> None:
                 "secure": cookie.get("secure", True),
                 "httpOnly": cookie.get("httpOnly", False),
             }
-            if cookie.get("sameSite"):
-                cdp_cookie["sameSite"] = cookie["sameSite"]
+            same_site = {
+                "strict": "Strict", "lax": "Lax", "none": "None", "no_restriction": "None"
+            }.get(str(cookie.get("sameSite", "")).lower())
+            if same_site:
+                cdp_cookie["sameSite"] = same_site
             if cookie.get("expirationDate") or cookie.get("expiry"):
                 cdp_cookie["expires"] = cookie.get("expirationDate") or cookie.get("expiry")
 
-            await ws.send(
-                json.dumps({"id": i + 10, "method": "Network.setCookie", "params": cdp_cookie})
-            )
-            await aio.sleep(0.01)
+            response = await command(i + 10, "Network.setCookie", cdp_cookie)
+            if "error" in response or not response.get("result", {}).get("success"):
+                await ws.close()
+                # Do not print the response: it may contain cookie credentials.
+                raise RuntimeError(f"Chrome rejected cookie {i + 1}; check export format")
 
         print(f"Injected {len(cookies)} cookies")
+
+        # Navigate after setting cookies so the page sees the new session.
+        await command(len(cookies) + 10, "Page.navigate", {"url": "https://chatgpt.com/"})
 
         # Verify by trying to get auth
         await aio.sleep(2)
         await ws.send(
             json.dumps(
                 {
-                    "id": 999,
+                    "id": len(cookies) + 11,
                     "method": "Runtime.evaluate",
                     "params": {
-                        "expression": "(async () => { var r = await fetch('/api/auth/session', {credentials:'include'}); var d = await r.json(); return d.accessToken ? 'OK:' + d.user?.name : 'FAIL'; })()",
+                        "expression": "(async () => { try { const r = await fetch('/api/auth/session', {credentials:'include'}); if (!r.ok) return 'HTTP_' + r.status; const d = await r.json(); return d.accessToken ? 'OK' : 'NO_SESSION'; } catch(e) { return 'FETCH_FAILED'; } })()",
                         "awaitPromise": True,
                         "returnByValue": True,
                         "timeout": 10000,
@@ -122,17 +129,27 @@ def inject_cookies(args) -> None:
         while True:
             r = await aio.wait_for(ws.recv(), timeout=15)
             resp = json.loads(r)
-            if resp.get("id") == 999:
+            if resp.get("id") == len(cookies) + 11:
                 result = resp.get("result", {}).get("result", {}).get("value", "")
-                if result.startswith("OK:"):
-                    print(f"Auth verified: {result}")
+                if "error" in resp or resp.get("result", {}).get("exceptionDetails"):
+                    print("Auth verification not ready: browser evaluation failed; service will retry")
+                elif result == "OK":
+                    print("Auth verified")
                 else:
-                    print(f"Auth failed: {result}")
-                    print("Cookies may be expired. Export fresh cookies from your browser.")
+                    # CDP can return an object for JS errors. Never assume a string
+                    # or dump an arbitrary result containing account information.
+                    status = result if isinstance(result, str) and (
+                        result in {"NO_SESSION", "FETCH_FAILED"}
+                        or (result.startswith("HTTP_") and result[5:].isdigit())
+                    ) else "unexpected browser result"
+                    print(f"Auth not yet verified: {status}; service will retry")
                 break
         await ws.close()
 
-    asyncio.run(_inject())
+    try:
+        asyncio.run(_inject())
+    except TimeoutError:
+        print("Cookie import or auth check timed out; login is not verified; service will retry login")
 
 
 def main() -> None:

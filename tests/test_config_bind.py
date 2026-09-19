@@ -166,4 +166,3 @@ def test_ensure_config_to_dict_roundtrip():
     assert d["ensure_degraded_poll_interval_s"] == 2.0
     assert d["ensure_degraded_poll_budget_s"] == 11.0
     assert d["ensure_breaker_cooldown_grace_s"] == 5.0
-

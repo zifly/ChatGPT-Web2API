@@ -27,7 +27,7 @@ from chatgpt_web2api.cdp_driver import CDPDriver
 
 def test_url_match_exact_conversation_path():
     d = CDPDriver(cdp_port=9222)
-    cid = "6a3a80c8-64bc-83eb-8967-66452f3d93b1"
+    cid = "00000000-0000-4000-8000-999999999999"
     assert d._is_url_at_conversation(
         f"https://chatgpt.com/c/{cid}", cid
     ) is True
@@ -582,4 +582,3 @@ async def test_cdp_does_not_loop_if_reconnect_also_fails():
         await d._cdp("Runtime.evaluate")
 
     assert reconnect_calls["n"] == 1, "must reconnect at most ONCE, never loop"
-

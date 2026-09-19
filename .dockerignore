@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+data/
+chrome-profile/
+cookies/
+cookies.json
+**/cookies.json
+**/__pycache__/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.log

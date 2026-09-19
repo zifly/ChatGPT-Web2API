@@ -1,0 +1,26 @@
+services:
+  chatgpt-web2api:
+    image: chatgpt-web2api-base:local
+    build: .
+    container_name: chatgpt-web2api
+    env_file:
+      - ./data/api.env
+    ports:
+      - "${W2A_BIND_ADDRESS:-127.0.0.1}:11111:8080"
+    volumes:
+      - ./data/chrome-profile:/data/chrome-profile
+      - ./data/cookies:/data/cookies:ro
+    environment:
+      W2A_HEADLESS: "true"
+      W2A_PORT: "8080"
+      W2A_HOST: "0.0.0.0"
+      HTTP_PROXY: "${W2A_PROXY_URL:-}"
+      HTTPS_PROXY: "${W2A_PROXY_URL:-}"
+      http_proxy: "${W2A_PROXY_URL:-}"
+      https_proxy: "${W2A_PROXY_URL:-}"
+      W2A_CHROME_PROXY: "${W2A_PROXY_URL:-}"
+      NO_PROXY: localhost,127.0.0.1,::1
+      no_proxy: localhost,127.0.0.1,::1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

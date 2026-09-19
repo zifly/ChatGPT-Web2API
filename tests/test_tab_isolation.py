@@ -527,4 +527,3 @@ async def test_two_owned_drivers_get_distinct_target_ids():
     assert d1._target_id != d2._target_id, \
         "two owned drivers must hold distinct tabs — shared id means shared DOM"
     assert d1._owns_target and d2._owns_target
-

@@ -1823,18 +1823,28 @@ class CDPDriver:
             ):
                 yield chunk
 
-            # Wait for URL to become /c/{id}
+            # Wait for a server-issued ID, not ChatGPT's WEB:<client UUID>
+            # placeholder. The latter changes to an unrelated ID once saved.
             conv_id = ""
             for _ in range(30):
-                try:
-                    url = await self._js_strict("window.location.href")
-                except CDPJSError:
-                    await asyncio.sleep(0.5)
-                    continue
-                if "/c/" in url:
-                    conv_id = url.split("/c/")[1].split("/")[0].split("?")[0]
+                conv_id = await self._conversation_id_from_url()
+                if conv_id:
                     break
                 await asyncio.sleep(0.5)
+
+            if not conv_id and not self._completion.last_dom_text:
+                web_text = ""
+                if turn_anchor.mode == "fresh_chat" and initial_count == 0:
+                    web_text = await self._read_confirmed_web_reply(text)
+                if web_text:
+                    yield StreamChunk(delta=web_text)
+                else:
+                    raise TurnReconciliationError(
+                        conversation_id="unresolved",
+                        anchor_mode=turn_anchor.mode,
+                        last_status="conversation_id_not_ready",
+                        diagnostic={},
+                    )
 
             if conv_id:
                 logger.info("Conversation: %s", conv_id)
@@ -1902,6 +1912,26 @@ class CDPDriver:
                 capture_scope.close()
 
         yield StreamChunk(delta="", finish_reason="stop")
+
+    async def _read_confirmed_web_reply(self, sent_text: str) -> str:
+        from .web_reply import WEB_REPLY_SNAPSHOT_JS, confirmed_web_reply
+
+        previous = None
+        # Require the same completed, correlated answer on two observations.
+        for _ in range(4):
+            try:
+                raw = await self._js_strict(WEB_REPLY_SNAPSHOT_JS)
+                snapshot = json.loads(raw)
+                answer = confirmed_web_reply(snapshot, sent_text)
+                identity = (snapshot.get("url"), answer) if answer else None
+                if identity is not None and identity == previous:
+                    logger.info("Confirmed fresh WEB conversation reply from rendered page")
+                    return answer
+                previous = identity
+            except (CDPJSError, ValueError, TypeError, AttributeError):
+                previous = None
+            await asyncio.sleep(0.5)
+        return ""
 
     async def _fetch_text_for_turn(self, conversation_id: str, anchor):
         """A2 anchored final-text fetch. Delegated to BackendClient.

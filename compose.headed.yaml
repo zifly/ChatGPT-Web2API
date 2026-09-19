@@ -1,0 +1,15 @@
+services:
+  chatgpt-web2api:
+    image: chatgpt-web2api-headed:local
+    build:
+      context: .
+      dockerfile: Dockerfile.headed
+    ports:
+      - "${W2A_BIND_ADDRESS:-127.0.0.1}:6080:6080"
+    environment:
+      - W2A_HEADLESS=false
+      - DISPLAY=:99
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data/vnc-password.txt:/run/secrets/vnc-password:ro
+    stop_grace_period: 30s

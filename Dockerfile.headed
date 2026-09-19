@@ -1,0 +1,15 @@
+FROM chatgpt-web2api-base:local
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb x11-utils x11vnc novnc websockify fluxbox fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker-desktop.sh /docker-desktop.sh
+RUN sed -i 's/\r$//' /docker-desktop.sh && chmod +x /docker-desktop.sh
+ENV DISPLAY=:99
+ENV W2A_HEADLESS=false
+EXPOSE 6080
+ENTRYPOINT ["/docker-desktop.sh"]
+
+# Reinstall updated application code while retaining cached Chrome/desktop layers.
+COPY src /app/src
+RUN pip install --no-cache-dir --no-deps /app
