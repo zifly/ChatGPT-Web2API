@@ -5,6 +5,9 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11-utils x11vnc novnc websockify fluxbox fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+# Open the desktop client directly when visiting port 6080 without a path.
+RUN ln -sfn vnc.html /usr/share/novnc/index.html
+
 COPY docker-desktop.sh /docker-desktop.sh
 RUN sed -i 's/\r$//' /docker-desktop.sh && chmod +x /docker-desktop.sh
 ENV DISPLAY=:99
