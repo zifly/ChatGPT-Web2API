@@ -4,7 +4,12 @@ ChatGPT-Web2API exposes two interfaces: an OpenAI-compatible REST API and an MCP
 
 ## REST API
 
-Base URL: `http://localhost:8080/v1`
+For this NAS deployment, the client Base URL is `http://<NAS-LAN-IP>:11111/v1`.
+Replace `<NAS-LAN-IP>` with your NAS address and set `W2A_BIND_ADDRESS` in `.env` to that address to allow LAN access. The default host binding is loopback-only; on the NAS host itself, use `http://127.0.0.1:11111/v1`.
+
+Inside the API container, the service listens on port `8080` (`http://127.0.0.1:8080/v1`). Docker maps host port `11111` to container port `8080`. A different container should use the NAS address and published port, or the service name and port `8080` on a shared Docker network; its own `localhost` is not the API container.
+
+Send `Authorization: Bearer <YOUR_API_KEY>` using a key configured in the private `data/api.env` file. See the [NAS setup guide](../NAS安装与故障排查手册.md) and [client integration guide](../API使用与项目接入手册.md) for the tested non-streaming text workflow.
 
 ### Chat Completions
 
