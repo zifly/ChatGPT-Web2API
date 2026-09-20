@@ -53,7 +53,7 @@ Mirror references: [TUNA Debian](https://mirrors.tuna.tsinghua.edu.cn/help/debia
 
 ### Reply source
 
-To use the configuration exercised in the NAS business tests, add:
+To use the configuration exercised in the NAS synthetic tests, add:
 
 ```dotenv
 W2A_REPLY_SOURCE=backend
@@ -139,7 +139,7 @@ After updating source, rerun the build/start script and perform acceptance check
 
 ## 6. Supported scope
 
-The REST chat interface handles text, not images or original-file uploads. NAS SSE behavior, multi-client use and long-term stability have not been fully accepted. The guarded DOM fallback has regression coverage but no separate comprehensive NAS acceptance. Disabling client retries does not disable every retry inside the service.
+The updated REST chat interface handles text and bounded Base64 image inputs, but not original document uploads. See [image input](docs/IMAGE-INPUT.md) for rebuild requirements and isolated Docker validation; synthetic NAS image and conversation-control acceptance is recorded in that guide. NAS SSE behavior, multi-client use and long-term stability have not been fully accepted. The guarded DOM fallback has regression coverage but no separate comprehensive NAS acceptance. Disabling client retries does not disable every retry inside the service.
 
 ## 7. Clean-install validation (2026-09-20)
 
@@ -149,8 +149,8 @@ Manual-login waiting and stale virtual-display locks were fixed. After restart, 
 
 The official-source attempt encountered network download failures and did not complete the same acceptance. These results do not establish compatibility with other hosts, ARM, streaming, concurrent clients or long-running operation.
 
-## 8. Reply protocol and real business validation (2026-09-20)
+## 8. Reply protocol and synthetic validation (2026-09-20)
 
-The combined integrity fix and backend reader passed 146 related offline tests. One local synthetic JSON request was exactly preserved. After deployment on an amd64 NAS, three fixed business samples were run twice: six requests covering ten work-group results passed JSON, schema, case-ID and candidate-pool checks. The second round used the real review page, with progress and persisted results observed. Results stayed pending review; formal library associations were not changed.
+The earlier integrity fix/backend reader passed 146 related offline tests and an exact local synthetic JSON request. The current image, conversation-control and startup-check suite passed 145 related tests. Synthetic inputs on one amd64 NAS verified fresh conversations, image recognition, SSE follow-up and explicit-ID switching. See [image validation](docs/IMAGE-INPUT.md).
 
-No independent same-turn protocol-original/API-text comparison was captured for these business requests. Parsing success is not universal proof of verbatim integrity. The main library's authenticated result display was not tested; long text, multi-turn, concurrency and sustained stability remain unverified. A model's incorrect excerpt-matching decision belongs to business validation and is not guaranteed away by this transport fix.
+These minimal synthetic checks do not establish broad vision accuracy, long-context behavior, concurrency or sustained stability. Consumers must validate output semantics and format. Public examples do not contain downstream application instances.

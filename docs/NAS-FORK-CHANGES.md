@@ -22,6 +22,16 @@ The upstream baseline sliced DOM deltas using the previous snapshot length, and 
 
 Opt-in `W2A_REPLY_SOURCE=backend` bypasses assistant DOM text/completion and polls the authenticated conversation protocol for the anchored terminal reply. Browser login and sending remain necessary. It fails without a trustworthy final reply and never falls back to page text. Both modes buffer SSE content until final verification. The default remains `reconciled`; the tested NAS explicitly uses `backend`.
 
-146 related regressions and an exact local synthetic JSON request passed. Two NAS rounds over three fixed samples produced six requests/ten work-group results passing structure and candidate checks; the second round used the review UI. Same-turn protocol-original comparisons, broader concurrency and streaming acceptance remain outstanding. Formal library associations were unchanged; see README for validation limits.
+The earlier reader passed 146 related regressions and an exact local synthetic JSON request. Public validation uses synthetic inputs only; downstream application examples and results are omitted. Broader long-context and concurrency acceptance remain outstanding.
 
 Complete Chinese/English installation and API guides include mode configuration, SSE behavior, acceptance limits and stdin diagnostics for images missing the check script. The noVNC root URL opens the desktop client directly.
+
+## 2026-09-20 image input
+
+REST Chat Completions accepts bounded PNG/JPEG/WebP Base64 data URLs in the last user message. Image bytes are validated before browser mutation; CDP uploads through the webpage file input and waits for server-hosted previews before sending. Multimodal user text is preserved for turn correlation. Unconfirmed uploads fail without sending; image requests bypass the non-streaming rate-limit resend wrapper. The default text path is retained. No generated-image downloads, document uploads or MCP image parameters are added.
+
+Single-image non-streaming, two-image SSE and a text-only follow-up passed on an isolated Docker Desktop browser. The same features subsequently passed synthetic NAS acceptance; see [image input](IMAGE-INPUT.md) for limits, examples and evidence boundaries.
+
+## 2026-09-20 client-controlled conversations
+
+Added top-level `new_conversation: true` to force a new webpage chat independently of system messages, for text and image requests. `conversation_id` continues the specified chat. Conflicting controls and invalid types return HTTP 400 before browser mutation; omission/false preserves legacy behavior. Eighteen HTTP regression cases cover both response formats, image routing, explicit-ID switching, failures and compatibility. NAS deployment subsequently passed a real new-chat / image-chat / SSE follow-up / switch-back sequence; see the image guide.

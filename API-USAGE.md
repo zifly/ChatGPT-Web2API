@@ -27,12 +27,12 @@ The client must reach the NAS LAN. Another Docker container should use the NAS I
 
 | Feature | Current behavior |
 |---|---|
-| Text requests | Minimal OK checks and fixed structured business samples passed |
+| Text requests | Minimal OK checks and synthetic structured samples passed |
 | Multi-turn text | History messages and custom `conversation_id` are implemented; see section 5 |
-| SSE | Content is buffered until final verification, not delivered token by token; NAS SSE acceptance is outstanding |
-| Images / `image_url` | Not uploaded or supported by this REST interface |
+| SSE | Content is buffered until final verification, not delivered token by token; synthetic NAS SSE image follow-up passed; broader streaming acceptance remains outstanding |
+| Images / `image_url` | PNG/JPEG/WebP Base64 upload in the last user message; [limits and example](docs/IMAGE-INPUT.md) |
 | Original PDF, Word, Excel or other files | Not supported; no `/v1/files` endpoint |
-| Document text | Extract text in the calling project; OCR is also the caller's responsibility |
+| Document text | Extract text in the calling project, or render scanned pages into supported images |
 | Tool/function calling | Not implemented by the REST chat handler |
 | Responses API | No `/v1/responses`; select Chat Completions |
 | Embeddings / audio | Not provided |
@@ -182,15 +182,28 @@ If the client uses a global proxy, add the NAS address to that process's `NO_PRO
 
 ## 5. Independent tasks and continued conversations
 
+See [backend conversation integration](docs/CONVERSATION-API.md) for request examples, persistence, failure handling, Python code and an English integration summary.
+
 ### A. Independent tasks
 
-Include a `system` message on every request and omit `conversation_id`. The current implementation then opens a new webpage conversation instead of automatically reusing the previous chat.
+Set top-level `new_conversation: true` and omit `conversation_id` to explicitly open a new webpage chat, for text or image input. A system message is optional. The older convention of including a system message and omitting the ID remains compatible.
+
+```json
+{
+  "model": "auto",
+  "new_conversation": true,
+  "messages": [{"role": "user", "content": "Start an independent task."}],
+  "stream": false
+}
+```
+
+The flag must be a JSON boolean, not a string. Combining `true` with a nonempty `conversation_id` returns HTTP 400 before browser mutation. Omitted or `false` preserves legacy selection behavior. An unavailable explicit ID returns an error instead of silently creating a new chat. This flag does not change account-level settings.
 
 System content is flattened into `[System Instructions]` text in the webpage prompt. It does not have the independent channel semantics or authority of the official API's system message.
 
 ### B. Client-managed history
 
-Include a system message and the user/assistant history you need, without a conversation ID. The service opens a new chat and flattens history into text. Only the last 20 user/assistant messages are retained by the current implementation. Summarize or trim long input in the client.
+Set `new_conversation: true` and include the user/assistant history you need, without a conversation ID. The service opens a new chat and flattens history into text. Only the last 20 user/assistant messages are retained by the current implementation. Summarize or trim long input in the client.
 
 ### C. Continue a webpage conversation
 
@@ -205,9 +218,9 @@ Start with A, save the nonempty `conversation_id`, and then send only the new us
 }
 ```
 
-An SDK can pass this extension through `extra_body={"conversation_id": "..."}`. Access to custom response fields depends on the wrapper; plain HTTP JSON is an alternative.
+An SDK can pass `extra_body={"new_conversation": True}` for a new chat or `extra_body={"conversation_id": "..."}` to continue. IDs must identify actual ChatGPT conversations accessible to the signed-in account, not arbitrary client-generated IDs. Non-streaming responses return the ID at the top level; successful SSE returns it in the final stop event. Access to custom response fields depends on the wrapper; plain HTTP JSON is an alternative.
 
-Do not resend the entire history while also continuing the original conversation, or context will be duplicated. Keep separate IDs for separate business conversations. When both system and conversation ID are absent, the service may reuse its last chat if its conditions match. Omitting the ID alone does not guarantee a fresh conversation; this shared state is not multi-user isolation.
+Do not resend the entire history while also continuing the original conversation, or context will be duplicated. Keep separate IDs for separate business conversations. Without `new_conversation: true`, system content or an explicit ID, text requests may reuse the last chat if legacy conditions match. Omitting the ID alone does not guarantee a fresh conversation; this shared state is not multi-user isolation.
 
 Start with serial requests. Do not manually switch chats or send messages in noVNC while a request is running.
 
@@ -226,7 +239,7 @@ Extract TXT/Markdown text or use your project's PDF/DOCX/XLSX parser, then submi
 }
 ```
 
-This does not upload the original file. Images, layout and table structure may be lost. A local path, NAS path or base64 string does not cause the service to open an attachment. Split long documents into manageable parts; the HTTP request-size limit is not the model context limit.
+This does not upload the original document file. Layout and table structure may be lost. A local path, NAS path or base64 string in ordinary text does not cause the service to open an attachment. For images, use the explicit `image_url` data-URL format in the [image guide](docs/IMAGE-INPUT.md). Split long documents into manageable parts; the HTTP request-size limit is not the model context limit.
 
 ## 7. Checks and error handling
 
@@ -279,13 +292,13 @@ Authorization: Bearer key from NAS_CHATGPT_API_KEY
 
 1. Use Chat Completions, not Responses API.
 2. Start with stream=false, concurrency 1, timeout 180 seconds, and no automatic client retries.
-3. Include a system message and omit conversation_id for every independent task.
-4. Send string text only; do not assume image_url, attachments, tools or response_format are supported.
+3. Set new_conversation=true and omit conversation_id for every independent task.
+4. Start with string text. For images, follow the documented Base64 image_url contract; do not assume document attachments, tools or response_format are supported.
 5. Read choices[0].message.content; empty output is failure.
 6. Send one 'Reply with exactly: OK' check, then validate representative business samples.
 7. On timeout, inspect the NAS browser/logs before retrying. Distinguish key errors from expired website login.
 8. Keep keys in private server configuration, never source code, frontend code or Git.
-9. Extract document text in this project; original-file/image uploads are unsupported.
+9. Extract document text in this project; original document uploads are unsupported. Image uploads are covered in the separate image guide.
 10. Preserve existing NAS Docker, profile, cookie and proxy settings.
 11. Validate JSON/schema, case IDs and candidate IDs; never guess repairs.
 Report changes, actual tests and remaining incompatibilities.
@@ -300,12 +313,12 @@ The old algorithm sliced new webpage text by the previous snapshot length. Prefi
 | `W2A_REPLY_SOURCE=reconciled` (default) | Completion detection then full current-turn reconciliation; a strictly guarded stable fresh-WEB page fallback is allowed |
 | `W2A_REPLY_SOURCE=backend` | Browser login/send, followed by conversation-protocol completion and full text; no assistant DOM scraping or page fallback |
 
-This is server configuration, not a per-request parameter. NAS business tests used `backend`. It requires a persistent conversation ID and trustworthy turn match; uncertain, empty or timed-out replies fail. In reconciled mode, page fallback can read an isolated code block's body but rejects mixed prose/code or multiple code blocks.
+This is server configuration, not a per-request parameter. NAS synthetic tests used `backend`. It requires a persistent conversation ID and trustworthy turn match; uncertain, empty or timed-out replies fail. In reconciled mode, page fallback can read an isolated code block's body but rejects mixed prose/code or multiple code blocks.
 
 Both modes buffer SSE content until final verification. Clients and reverse proxies must tolerate the generation wait. This does not force the model to produce valid JSON or correct business decisions.
 
 ## 10. Validation scope
 
-API fields, conversation branches and errors were checked against the source. The combined reply fix/backend mode passed 146 related offline tests and one exact synthetic JSON request locally. On the NAS, three fixed business samples ran in two rounds: six requests and ten work-group results passed JSON/schema/case-ID/candidate-pool checks. The second round used the real review page; results stayed pending without changing formal library associations.
+API fields, conversation branches and errors were checked against source. The earlier reply fix/backend mode passed 146 related offline tests and an exact local synthetic JSON request. The current image, conversation-control and startup-check suite passed 145 related tests. Synthetic NAS checks cover new chats, image input, SSE follow-up and switching back to a stored ID; see [image validation](docs/IMAGE-INPUT.md).
 
-These business requests were not independently compared against same-turn protocol originals. The main-library UI after administrator login was not tested. Long text, multi-turn, high concurrency, sustained stability and the NAS SSE path remain to be accepted. Business meaning still requires review. Test client examples in your own network and dependency environment; the SDK example was not separately executed.
+Broad vision accuracy, long-context behavior, concurrency and sustained stability remain unverified. Consumers must validate output semantics. Test examples in your own network and dependency environment; the SDK example was not separately executed. Public examples do not contain downstream application instances.

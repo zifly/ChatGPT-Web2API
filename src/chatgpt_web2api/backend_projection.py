@@ -54,9 +54,10 @@ CONVERSATION_PROJECTION_JS = """
       var author = msg.author || {};
       var content = msg.content || {};
       var parts = content.parts || [];
-      // Join non-empty string parts for text nodes; drop for non-text.
+      // Preserve user text in multimodal messages for turn correlation.
       var text = '';
-      if (content.content_type === 'text') {
+      if (content.content_type === 'text' ||
+          (author.role === 'user' && content.content_type === 'multimodal_text')) {
         var textParts = [];
         for (var i = 0; i < parts.length; i++) {
           if (typeof parts[i] === 'string' && parts[i].trim()) {
@@ -96,5 +97,5 @@ PROJECTED_SCHEMA_FIELDS = {
     "create_time": "float — backend-assigned creation timestamp",
     "end_turn": "bool — terminal flag on assistant nodes",
     "content_type": "str — text | reasoning_recap | tool_use | tool_result | multimodal_text | unknown",
-    "text": "str — joined non-empty text parts (text nodes only; empty for non-text)",
+    "text": "str — joined text parts for text nodes and multimodal user nodes; empty otherwise",
 }

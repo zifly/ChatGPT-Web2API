@@ -3,15 +3,47 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
+
+
+def wait_for_health(request, seconds):
+    """Retry only read-only startup checks, never a generation request."""
+    deadline = time.monotonic() + seconds
+    announced = False
+    while True:
+        try:
+            health = request("/health")
+        except urllib.error.HTTPError:
+            # Wrong credentials and HTTP failures need diagnosis, not retries.
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if time.monotonic() >= deadline:
+                raise
+        else:
+            if (health.get("chrome_running") and health.get("driver_connected")) or health.get("open_breakers"):
+                return health
+            if time.monotonic() >= deadline:
+                return health
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # Perform one final read to preserve a useful connection error.
+            return request("/health")
+        if not announced:
+            print("Waiting for the API and browser to finish starting...", flush=True)
+            announced = True
+        time.sleep(min(2, remaining))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--send", action="store_true", help="Send one 'Reply with exactly: OK' request")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--wait", type=int, default=0, help="Wait this many seconds for API/browser startup (read-only)")
     args = parser.parse_args()
+    if args.wait < 0:
+        parser.error("--wait must be nonnegative")
     key = os.environ.get("W2A_API_KEYS", "").split(",")[0].strip()
     if not key:
         print("FAIL: W2A_API_KEYS is not configured")
@@ -27,7 +59,7 @@ def main():
             return json.load(response)
 
     try:
-        health = request("/health")
+        health = wait_for_health(request, args.wait)
         print("Health:", json.dumps({name: health.get(name) for name in (
             "status", "chrome_running", "driver_connected", "requests_served",
             "last_successful_send_at", "last_error", "open_breakers",

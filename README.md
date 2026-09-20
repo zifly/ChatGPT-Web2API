@@ -10,6 +10,7 @@ Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API)
 |---|---|---|
 | Installation, login and troubleshooting | [NAS 安装与排查](NAS安装与故障排查手册.md) | [NAS installation and troubleshooting](NAS-INSTALLATION.md) |
 | API setup, examples and limitations | [API 使用与接入](API使用与项目接入手册.md) | [API usage and integration](API-USAGE.md) |
+| Backend-managed conversations | [后端会话接入](docs/CONVERSATION-API.md) | [Conversation integration (bilingual)](docs/CONVERSATION-API.md) |
 
 ## What this fork changes / 修改内容
 
@@ -19,6 +20,8 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 - **Browser desktop:** Xvfb, x11vnc and noVNC with a password file. Port `6080/` opens the desktop client directly; `/vnc.html` remains supported. Desktop login can wait indefinitely, and startup handles stale Xvfb locks.
 - **Optional network settings:** official Debian/PyPI sources and no proxy by default. Build mirrors, build proxy and runtime proxy are separate options; mainland-China examples are optional.
 - **Cookie compatibility:** UTF-8 BOM and SameSite normalization, with CDP import acknowledgments checked.
+- **Client-controlled chats:** `new_conversation: true` explicitly starts a new chat; `conversation_id` continues a chosen chat. Conflicting controls return HTTP 400. Omitting both keeps the legacy behavior. See [API usage](API-USAGE.md#5-independent-tasks-and-continued-conversations).
+- **Image input:** REST chat requests can upload PNG/JPEG/WebP Base64 images through the webpage and receive text answers. Upload completion is checked before sending. See the [bilingual image guide](docs/IMAGE-INPUT.md) for limits and examples.
 - **Conversation handling:** temporary `WEB:` IDs are not treated as server-issued conversation IDs; a guarded fresh-chat DOM fallback is available in the default reconciled mode.
 - **Reply integrity:** provisional DOM deltas are no longer exposed to API consumers. Final text replaces the entire provisional answer instead of merely adding a suffix. This addresses corruption when the webpage rewrites earlier characters during rendering.
 - **Backend-only reply mode:** `W2A_REPLY_SOURCE=backend` skips assistant DOM text and DOM completion detection. It polls the authenticated webpage conversation endpoint and returns only a completed reply matched to the current turn. Unresolved IDs, ambiguous/partial replies and deadlines fail explicitly; this mode never falls back to page text.
@@ -53,16 +56,15 @@ No API keys, cookies, Chrome profiles, VNC passwords or runtime logs are distrib
 - **146 related offline regression tests passed** for the combined integrity fix and backend-only reader.
 - A real isolated Chrome instance fetched a synthetic local conversation endpoint; protocol extraction preserved JSON, Unicode and whitespace while ignoring intentionally incorrect page text.
 - One isolated Docker Desktop request using backend mode returned a synthetic JSON document exactly as requested (about 9 seconds).
-- After deploying backend mode on one amd64 NAS, **six real business requests covering ten work-group results** passed JSON, schema, case-ID and candidate-pool checks. The second set of three requests was triggered through the actual review page, including progress and result display. Results remained pending review; formal music-library associations were not modified.
-- This was three fixed samples exercised in two rounds, not six independent datasets. No independent same-turn protocol-original/API-text comparison was captured for those business requests. Valid JSON and valid IDs alone do not prove universal verbatim integrity.
-- The review page was tested; the separate main-library page stopped at its administrator login, so its authenticated result display was not accepted. One excerpt-matching decision remained a business/prompt issue, separate from response corruption.
+- Current image-input, conversation-control and startup-check coverage comprises 145 related offline tests. Synthetic NAS checks passed for a fresh text chat, a fresh two-image chat, an SSE follow-up and switching back to the first conversation. See [image validation](docs/IMAGE-INPUT.md).
+- These small synthetic checks do not establish broad model accuracy, long-context behavior or concurrency guarantees.
 
-真实业务两轮测试通过，但长文本、多轮、高并发、长期稳定性以及 NAS 上的 SSE 路径尚未充分验收。上述结论不代表模型判断全部正确，也不代表所有场景都已验证。
+公开验收示例仅使用合成图片、通用文字和虚构测试编号，不包含下游项目的实际任务、数据或界面。长文本、高并发和长期稳定性尚未充分验收；模型判断仍需调用方验证。
 
 An earlier clean Docker Desktop installation passed using optional TUNA mirrors and a proxy, including manual login and restart. The official-source path encountered download failures and did not complete the same clean-install acceptance. ARM compatibility is not claimed.
 
 ## Limits
 
-The REST interface currently accepts text, not image or original-file uploads. It does not implement Responses API, tool calling or enforced structured output. Reported `usage` values are placeholders. Internal retries elsewhere may still occur even when client retries are disabled. Account limits continue to apply.
+The REST interface accepts text and bounded Base64 image inputs; original document files are not supported. Image input and explicit conversation control passed synthetic acceptance on Docker Desktop and one amd64 NAS; see the image guide for scope. It does not implement Responses API, tool calling or enforced structured output. Reported `usage` values are placeholders. Internal retries elsewhere may still occur even when client retries are disabled. Account limits continue to apply.
 
 [Detailed fork changes](docs/NAS-FORK-CHANGES.md) · [Backend reply mode](docs/PROTOCOL-REPLY-EXPERIMENT.md) · [Upstream README](https://github.com/Octo-Lex/ChatGPT-Web2API#readme) · [MIT license](LICENSE)

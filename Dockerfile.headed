@@ -17,4 +17,5 @@ ENTRYPOINT ["/docker-desktop.sh"]
 
 # Reinstall updated application code while retaining cached Chrome/desktop layers.
 COPY src /app/src
-RUN pip install --no-cache-dir --no-deps /app
+COPY pyproject.toml /app/pyproject.toml
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" /app

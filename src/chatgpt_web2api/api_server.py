@@ -27,6 +27,7 @@ from .cdp_driver import (
 )
 from .config import Config
 from .cross_process_lock import LockAcquisitionError
+from .image_input import ImageInputError, normalize_messages
 from .lock_resolver import MutationLock, OwnedTabRequiredError, resolve_mutation_lock
 from .resilience import retry_on_rate_limit
 
@@ -244,7 +245,12 @@ class APIServer:
                 status=400,
             )
 
-        messages = body.get("messages", [])
+        if not isinstance(body, dict):
+            return web.json_response({"error": {"message": "Request body must be an object", "type": "invalid_request_error"}}, status=400)
+        try:
+            messages, images = normalize_messages(body.get("messages", []))
+        except ImageInputError as exc:
+            return web.json_response({"error": {"message": str(exc), "type": "invalid_request_error"}}, status=400)
         if not messages:
             return web.json_response(
                 {"error": {"message": "No messages provided", "type": "invalid_request_error"}},
@@ -260,6 +266,21 @@ class APIServer:
             or self._config.chatgpt.default_project_id
         )
         conversation_id = body.get("conversation_id")
+        new_conversation = body.get("new_conversation", False)
+        invalid = None
+        if not isinstance(new_conversation, bool):
+            invalid = "new_conversation must be a JSON boolean"
+        elif conversation_id is not None and (
+            not isinstance(conversation_id, str) or not conversation_id.strip()
+        ):
+            invalid = "conversation_id must be a nonempty string or null"
+        elif new_conversation and conversation_id:
+            invalid = "new_conversation=true cannot be combined with conversation_id"
+        if invalid:
+            return web.json_response(
+                {"error": {"message": invalid, "type": "invalid_request_error"}},
+                status=400,
+            )
 
         # Build conversation text from all messages
         # Includes prior assistant context for stateless clients (OpenAI SDK)
@@ -370,7 +391,9 @@ class APIServer:
                     # Explicit conversation_id from client — navigate to it
                     await self._driver.navigate_conversation(conversation_id)
                 elif (
-                    self._last_conv_id
+                    not new_conversation
+                    and not images
+                    and self._last_conv_id
                     and self._driver._current_conv_id == self._last_conv_id
                     and project_id == self._last_project_id
                     and not system_parts
@@ -388,9 +411,9 @@ class APIServer:
                     self._last_project_id = project_id
 
                 if stream:
-                    return await self._stream_response(request, model_slug, full_text, timeout)
+                    return await self._stream_response(request, model_slug, full_text, timeout, **({"images": images} if images else {}))
                 else:
-                    return await self._full_response(request, model_slug, full_text, timeout)
+                    return await self._full_response(request, model_slug, full_text, timeout, **({"images": images} if images else {}))
 
         except Exception as e:
             logger.error("Chat error: %s", e, exc_info=True)
@@ -521,7 +544,7 @@ class APIServer:
     # ── Response formatters ───────────────────────────────────
 
     async def _full_response(
-        self, request: web.Request, model: str, text: str, timeout: float
+        self, request: web.Request, model: str, text: str, timeout: float, *, images=None
     ) -> web.Response:
         """Non-streaming: collect the driver's verified final reply, return one JSON.
 
@@ -539,11 +562,13 @@ class APIServer:
             collected = ""
             async for chunk in self._driver.send_and_stream(
                 text, timeout=timeout, budgets=budgets, model=model,
+                **({"images": images} if images else {}),
             ):
                 collected += chunk.delta
             return collected
 
-        full_text = await retry_on_rate_limit(self._driver, _send_and_collect)
+        # Do not replay uploads/sends after an image request hits a rate limit.
+        full_text = await _send_and_collect() if images else await retry_on_rate_limit(self._driver, _send_and_collect)
 
         conv_id = self._driver._current_conv_id or ""
         self._last_conv_id = conv_id
@@ -568,7 +593,7 @@ class APIServer:
         )
 
     async def _stream_response(
-        self, request: web.Request, model: str, text: str, timeout: float
+        self, request: web.Request, model: str, text: str, timeout: float, *, images=None
     ) -> web.Response:
         """Streaming: SSE framing with content buffered until final verification.
 
@@ -650,6 +675,7 @@ class APIServer:
         try:
             async for chunk in self._driver.send_and_stream(
                 text, timeout=timeout, budgets=budgets, model=model,
+                **({"images": images} if images else {}),
             ):
                 if chunk.delta:
                     await self._send_sse(

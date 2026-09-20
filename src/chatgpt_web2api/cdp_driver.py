@@ -1726,6 +1726,7 @@ class CDPDriver:
         *,
         budgets=None,
         model: str | None = None,
+        images=None,
     ) -> AsyncIterator[StreamChunk]:
         """Send a message, then yield the verified complete reply.
 
@@ -1757,6 +1758,10 @@ class CDPDriver:
 
         # PR4 belt-and-suspenders: refuse to mutate the DOM in parallel mode.
         self._assert_owned_tab_required()
+        # An interrupted upload must not leak into a later text request.
+        from .image_upload import clear_pending_images, upload_images
+        await clear_pending_images(self)
+        send_started = time.monotonic()
         # A1: count existing assistants BEFORE sending (fail-closed baseline).
         initial_count = await self._read_assistant_count_baseline()
 
@@ -1779,6 +1784,15 @@ class CDPDriver:
         try:
             # Type and send.
             await self.type_message(text)
+            if images:
+                from .image_input import ImageUploadError
+                try:
+                    await upload_images(self, images, timeout=min(90, timeout))
+                except TimeoutError:
+                    raise ImageUploadError("Image upload was not confirmed before the deadline; no prompt was sent") from None
+                timeout -= time.monotonic() - send_started
+                if timeout <= 0:
+                    raise ImageUploadError("Request deadline expired during image upload; no prompt was sent")
             await self.click_send()
 
             # A2 Step 6: wait for the IdentityListener to capture the UUID.
@@ -1931,6 +1945,13 @@ class CDPDriver:
             # A2 Step 9: ALWAYS clear the capture scope (failure-mode E).
             if capture_scope is not None:
                 capture_scope.close()
+            if images:
+                try:
+                    await clear_pending_images(self)
+                except Exception:
+                    # Keep names armed: the next request must clear these
+                    # attachments successfully before it can send anything.
+                    logger.warning("Image attachment cleanup incomplete; next send will check again")
 
         yield StreamChunk(delta="", finish_reason="stop")
 
