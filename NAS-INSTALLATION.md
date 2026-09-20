@@ -153,6 +153,6 @@ The official-source attempt encountered network download failures and did not co
 
 ## 8. Reply protocol and synthetic validation (2026-09-20)
 
-The earlier integrity fix/backend reader passed 146 related offline tests and an exact local synthetic JSON request. The current image, conversation-control and startup-check suite passed 145 related tests. Synthetic inputs on one amd64 NAS verified fresh conversations, image recognition, SSE follow-up and explicit-ID switching. See [image validation](docs/IMAGE-INPUT.md).
+The earlier integrity fix/backend reader passed 146 related offline tests and an exact local synthetic JSON request. The current image, conversation-control and startup-check suite passed 153 related tests. Synthetic inputs on one amd64 NAS verified fresh conversations, image recognition, SSE follow-up and explicit-ID switching. See [image validation](docs/IMAGE-INPUT.md).
 
 These minimal synthetic checks do not establish broad vision accuracy, long-context behavior, concurrency or sustained stability. Consumers must validate output semantics and format. Public examples do not contain downstream application instances.

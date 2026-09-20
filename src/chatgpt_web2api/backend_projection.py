@@ -42,7 +42,8 @@ CONVERSATION_PROJECTION_JS = """
 (async function() {
   try {
     var r = await fetch('/backend-api/conversation/' + __D.conv_id + '?offset=0&limit=' + __D.limit, {
-      headers: {'Authorization': 'Bearer ' + __D.token}
+      headers: {'Authorization': 'Bearer ' + __D.token},
+      signal: AbortSignal.timeout(12000)
     });
     if (!r.ok) return JSON.stringify({__status: r.status});
     var conv = await r.json();

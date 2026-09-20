@@ -460,6 +460,21 @@ class APIServer:
         - Everything else stays a 500 ``server_error`` (a real failure, not
           retriable).
         """
+        from .image_input import ImageUploadTimeout
+        from .turn_anchor import TurnReconciliationError
+
+        if isinstance(exc, ImageUploadTimeout):
+            return web.json_response(
+                {"error": {"message": str(exc), "type": "server_error",
+                           "code": "image_upload_timeout", "prompt_sent": False}},
+                status=504,
+            )
+        if isinstance(exc, TurnReconciliationError) and exc.diagnostic.get("reason") == "deadline_exceeded":
+            return web.json_response(
+                {"error": {"message": str(exc), "type": "server_error",
+                           "code": "reply_timeout", "prompt_sent": True}},
+                status=504,
+            )
         if isinstance(exc, RateLimitError):
             retry_after = str(int(exc.retry_after))
             return web.json_response(

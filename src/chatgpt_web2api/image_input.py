@@ -29,6 +29,10 @@ class ImageUploadError(RuntimeError):
     """Upload could not be verified; the prompt must not be sent."""
 
 
+class ImageUploadTimeout(ImageUploadError):
+    """The upload deadline expired before any prompt was sent."""
+
+
 @dataclass(frozen=True)
 class ImageInput:
     mime: str

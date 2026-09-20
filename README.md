@@ -25,6 +25,7 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 - **Image input:** REST chat requests can upload PNG/JPEG/WebP Base64 images through the webpage and receive text answers. Upload completion is checked before sending. See the [bilingual image guide](docs/IMAGE-INPUT.md) for limits and examples.
 - **Conversation handling:** temporary `WEB:` IDs are not treated as server-issued conversation IDs; a guarded fresh-chat DOM fallback is available in the default reconciled mode.
 - **Reply integrity:** provisional DOM deltas are no longer exposed to API consumers. Final text replaces the entire provisional answer instead of merely adding a suffix. This addresses corruption when the webpage rewrites earlier characters during rendering.
+- **Timeout recovery:** transient read timeouts stay within the original reply deadline and do not replay the send. Upload timeouts include sanitized phase/state diagnostics; non-streaming errors distinguish `image_upload_timeout` (not sent) from `reply_timeout` (already submitted).
 - **Backend-only reply mode:** `W2A_REPLY_SOURCE=backend` skips assistant DOM text and DOM completion detection. It polls the authenticated webpage conversation endpoint and returns only a completed reply matched to the current turn. Unresolved IDs, ambiguous/partial replies and deadlines fail explicitly; this mode never falls back to page text.
 
 我们修复的是采集层的丢字、重复和错误拼接，不是通过补括号或猜测 ID 修复 JSON。模型本身仍可能生成格式不合要求或语义错误的内容，调用方需要校验。
@@ -59,7 +60,7 @@ No API keys, cookies, Chrome profiles, VNC passwords or runtime logs are distrib
 - **146 related offline regression tests passed** for the combined integrity fix and backend-only reader.
 - A real isolated Chrome instance fetched a synthetic local conversation endpoint; protocol extraction preserved JSON, Unicode and whitespace while ignoring intentionally incorrect page text.
 - One isolated Docker Desktop request using backend mode returned a synthetic JSON document exactly as requested (about 9 seconds).
-- Current image-input, conversation-control and startup-check coverage comprises 145 related offline tests. Synthetic NAS checks passed for a fresh text chat, a fresh two-image chat, an SSE follow-up and switching back to the first conversation. See [image validation](docs/IMAGE-INPUT.md).
+- Current image-input, conversation-control and startup-check coverage comprises 153 related offline tests. Synthetic NAS checks passed for a fresh text chat, a fresh two-image chat, an SSE follow-up and switching back to the first conversation. See [image validation](docs/IMAGE-INPUT.md).
 - These small synthetic checks do not establish broad model accuracy, long-context behavior or concurrency guarantees.
 
 公开验收示例仅使用合成图片、通用文字和虚构测试编号，不包含下游项目的实际任务、数据或界面。长文本、高并发和长期稳定性尚未充分验收；模型判断仍需调用方验证。

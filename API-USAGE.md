@@ -258,6 +258,8 @@ Inspect `chrome_running`, `driver_connected`, `last_error` and `open_breakers`. 
 | 401: expired login / invalid_api_key details | Website authentication may have expired; inspect the desktop |
 | 429 | Respect `Retry-After`; internal backoff may already have occurred |
 | 503 | Error codes such as `lock_timeout` or `circuit_open`; inspect queueing and browser state |
+| 504 / reply_timeout | Reply deadline expired after submission (`prompt_sent=true`); inspect before resending |
+| 504 / image_upload_timeout | Upload was not confirmed (`prompt_sent=false`); inspect sanitized stage/state and the webpage |
 | 504 / generation_stuck | Generation stall, webpage state and proxy connectivity |
 | 500 or timeout | The message may already have been sent; inspect before retrying |
 | HTTP 200 with empty content | Treat as failure; do not forward as a valid business result |

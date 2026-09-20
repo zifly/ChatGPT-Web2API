@@ -95,3 +95,54 @@ async def test_cancellation_closes_capture_scope(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         _ = [c async for c in d.send_and_stream("request")]
     listener.arm_capture_scope.return_value.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_single_read_timeout_does_not_resend_or_end_reply(monkeypatch):
+    monkeypatch.setenv("W2A_REPLY_SOURCE", "backend")
+    d = driver_for(monkeypatch, [], "final", mode="existing_conversation")
+    d._fetch_text_for_turn = AsyncMock(side_effect=[
+        TimeoutError("CDP timeout: Runtime.evaluate"),
+        TurnTextResult("matched", text="verified final"),
+    ])
+    chunks = [c async for c in d.send_and_stream("request")]
+    assert "".join(c.delta for c in chunks) == "verified final"
+    assert d._fetch_text_for_turn.await_count == 2
+    anchors = [call.args[1] for call in d._fetch_text_for_turn.await_args_list]
+    assert anchors[0] is anchors[1]
+    d.type_message.assert_awaited_once()
+    d.click_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_url_timeout_is_read_only_and_next_id_is_checked(monkeypatch):
+    d = driver_for(monkeypatch, [], "untrusted")
+    d._conversation_id_from_url = AsyncMock(side_effect=[TimeoutError(), "wrong-id"])
+    anchor = TurnAnchor(sent_text="request", mode="existing_conversation", conversation_id_at_capture="expected")
+    with pytest.raises(TurnReconciliationError, match="conversation_changed"):
+        await read_protocol_reply(d, anchor, 1)
+    d._fetch_text_for_turn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_repeated_read_timeouts_obey_overall_deadline():
+    from types import SimpleNamespace
+    d = SimpleNamespace(_conversation_id_from_url=AsyncMock(return_value="server-id"),
+                        _fetch_text_for_turn=AsyncMock(side_effect=TimeoutError("CDP timeout")))
+    with pytest.raises(TurnReconciliationError) as caught:
+        await read_protocol_reply(d, TurnAnchor(sent_text="request", mode="fresh_chat"), 0.02)
+    assert caught.value.last_status == "fetch_timeout"
+    assert caught.value.diagnostic["reason"] == "deadline_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_overall_deadline_interrupts_inflight_read():
+    from types import SimpleNamespace
+    async def blocked(*args):
+        await asyncio.sleep(60)
+    d = SimpleNamespace(_conversation_id_from_url=AsyncMock(return_value="server-id"),
+                        _fetch_text_for_turn=AsyncMock(side_effect=blocked))
+    with pytest.raises(TurnReconciliationError) as caught:
+        await read_protocol_reply(d, TurnAnchor(sent_text="request", mode="fresh_chat"), 0.02)
+    assert caught.value.last_status == "fetch_pending"
+    assert d._fetch_text_for_turn.await_count == 1

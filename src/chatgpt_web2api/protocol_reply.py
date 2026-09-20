@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .turn_anchor import TurnReconciliationError
+
+logger = logging.getLogger(__name__)
 
 
 async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]:
@@ -19,7 +22,13 @@ async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]
     try:
         async with asyncio.timeout(timeout):
             while True:
-                current_id = await driver._conversation_id_from_url()
+                try:
+                    current_id = await driver._conversation_id_from_url()
+                except TimeoutError:
+                    last_status = "conversation_id_read_timeout"
+                    logger.warning("Protocol URL read timed out; retrying read within reply deadline")
+                    await asyncio.sleep(1)
+                    continue
                 if current_id:
                     expected_id = conversation_id or anchor.conversation_id_at_capture
                     if expected_id and current_id != expected_id:
@@ -30,7 +39,17 @@ async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]
                             diagnostic={},
                         )
                     conversation_id = current_id
-                    result = await driver._fetch_text_for_turn(conversation_id, anchor)
+                    last_status = "fetch_pending"
+                    try:
+                        result = await driver._fetch_text_for_turn(conversation_id, anchor)
+                    except TimeoutError:
+                        # A single CDP read has a shorter deadline than the reply.
+                        # Retry only this read, with the original turn anchor. The
+                        # outer deadline/cancellation still interrupts the loop.
+                        last_status = "fetch_timeout"
+                        logger.warning("Protocol result read timed out; retrying read within reply deadline")
+                        await asyncio.sleep(1)
+                        continue
                     last_status = result.status
                     if result.status == "matched" and isinstance(result.text, str) and result.text.strip():
                         return conversation_id, result.text

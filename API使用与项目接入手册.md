@@ -258,6 +258,8 @@ SDK 新建时传 `extra_body={"new_conversation": True}`，续聊时传 `extra_b
 | 401 + 登录过期相关信息 / invalid_api_key | 也可能是 ChatGPT 网页登录失效，应查看网页，不能只换本地密钥 |
 | 429 | 查看 Retry-After，等限流解除；服务内部可能已做过退避重试 |
 | 503 | 查看错误 code：lock_timeout、circuit_open 等；先处理排队、熔断或浏览器状态 |
+| 504 / reply_timeout | 已发送后等待回复超时（`prompt_sent=true`）；不要重发同一条消息 |
+| 504 / image_upload_timeout | 上传未确认（`prompt_sent=false`）；查看脱敏的上传阶段、状态和网页 |
 | 504 / generation_stuck | 生成停滞；检查网页是否卡住，以及代理网络 |
 | 500 或客户端超时 | 查看日志和网页，消息可能已发出；不要立即自动重发 |
 | HTTP 200 但 content 为空 | 按失败处理，保留诊断信息，不作为成功结果交给业务 |

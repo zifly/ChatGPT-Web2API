@@ -214,3 +214,75 @@ async def test_image_rate_limit_does_not_replay_send():
     with pytest.raises(RateLimitError):
         await APIServer(Config(), d)._full_response(None, 'auto', 'look', 120, images=[decode_image(part())])
     assert calls == 1
+
+
+def upload_driver(state_callback):
+    d = MagicMock()
+    d._js_with_data_strict = AsyncMock(side_effect=state_callback)
+    async def cdp(method, params, **kwargs):
+        if method == 'Runtime.evaluate':
+            return {'result': {'result': {'objectId': 'input'}}}
+        return {'result': {}}
+    d._cdp = AsyncMock(side_effect=cdp)
+    return d
+
+
+@pytest.mark.asyncio
+async def test_upload_timeout_retains_only_safe_state(caplog):
+    from chatgpt_web2api.image_input import ImageUploadTimeout
+    async def state(js, data, **kwargs):
+        return json.dumps({'names': data['names'], 'ready': False, 'sendReady': True,
+                           'previews': [{'source': 'blob', 'decoded': True, 'busy': False,
+                                         'url': 'https://example.invalid/?private-token=secret'}]})
+    d = upload_driver(state)
+    with pytest.raises(ImageUploadTimeout) as caught:
+        await upload_images(d, [decode_image(part())], timeout=0.03)
+    message = str(caught.value)
+    assert 'wait_upload_confirmation' in message and 'blob' in message
+    assert 'private-token' not in message + caplog.text
+    assert not any(name in message + caplog.text for name in d._pending_image_names)
+    assert len([c for c in d._cdp.await_args_list if c.args[0] == 'DOM.setFileInputFiles']) == 1
+    files = next(c.args[1]['files'] for c in d._cdp.await_args_list if c.args[0] == 'DOM.setFileInputFiles')
+    assert all(not Path(p).exists() for p in files)
+
+
+@pytest.mark.asyncio
+async def test_upload_read_timeout_does_not_upload_again(monkeypatch):
+    monkeypatch.setattr('chatgpt_web2api.image_upload.asyncio.sleep', AsyncMock())
+    reads = 0
+    async def state(js, data, **kwargs):
+        nonlocal reads
+        if not data['names']:
+            return json.dumps({'names': []})
+        reads += 1
+        if reads == 1:
+            raise TimeoutError('CDP timeout')
+        return json.dumps({'names': data['names'], 'ready': True, 'sendReady': True})
+    d = upload_driver(state)
+    await upload_images(d, [decode_image(part())], timeout=1)
+    assert reads == 3
+    assert len([c for c in d._cdp.await_args_list if c.args[0] == 'DOM.setFileInputFiles']) == 1
+
+
+@pytest.mark.asyncio
+async def test_attachment_alert_fails_before_upload_deadline():
+    async def state(js, data, **kwargs):
+        return json.dumps({'names': data['names'], 'ready': False,
+                           'previews': [{'source': 'blob', 'alert': True}] if data['names'] else []})
+    with pytest.raises(ImageUploadError, match='webpage reported'):
+        await upload_images(upload_driver(state), [decode_image(part())], timeout=1)
+
+
+def test_timeout_responses_distinguish_sent_and_unsent():
+    from chatgpt_web2api.image_input import ImageUploadTimeout
+    from chatgpt_web2api.turn_anchor import TurnReconciliationError
+    server = APIServer(Config(), MagicMock())
+    upload = server._error_response(ImageUploadTimeout('upload timeout'))
+    assert upload.status == 504
+    error = json.loads(upload.body)['error']
+    assert error['code'] == 'image_upload_timeout' and error['prompt_sent'] is False
+    reply = server._error_response(TurnReconciliationError(
+        'synthetic-id', 'existing_conversation', 'fetch_timeout', {'reason': 'deadline_exceeded'}))
+    assert reply.status == 504
+    error = json.loads(reply.body)['error']
+    assert error['code'] == 'reply_timeout' and error['prompt_sent'] is True
