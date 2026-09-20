@@ -3,7 +3,6 @@ from urllib.parse import unquote, urlsplit
 
 from .turn_anchor import normalize_text
 
-
 WEB_REPLY_SNAPSHOT_JS = r"""
 (() => {
     const users = document.querySelectorAll('[data-message-author-role="user"]');
@@ -20,7 +19,20 @@ WEB_REPLY_SNAPSHOT_JS = r"""
     const stopped = ![...document.querySelectorAll('[data-testid="stop-button"]')].some(visible);
     const markdown = [...answer.querySelectorAll('.markdown')];
     info.user_text = user.innerText || user.textContent || '';
-    info.text = markdown.map(el => el.innerText || el.textContent || '').join('\n').trim();
+    const blocks = markdown.flatMap(el => [...el.querySelectorAll('pre')]);
+    if (blocks.length) {
+        // Only accept an isolated code block. Mixed prose/code needs the
+        // backend's original text; rendered labels are not model output.
+        if (markdown.length !== 1 || blocks.length !== 1) return JSON.stringify(info);
+        const code = blocks[0].querySelector('code');
+        if (!code) return JSON.stringify(info);
+        const outside = markdown[0].cloneNode(true);
+        outside.querySelectorAll('pre, button, [role="button"]').forEach(el => el.remove());
+        if (outside.textContent.trim()) return JSON.stringify(info);
+        info.text = code.textContent;
+    } else {
+        info.text = markdown.map(el => el.innerText || el.textContent || '').join('\n');
+    }
     info.complete = !!action && stopped && visible(answer);
     return JSON.stringify(info);
 })()
@@ -46,4 +58,4 @@ def confirmed_web_reply(snapshot: dict, sent_text: str) -> str:
         return ""
     if not sent_text or normalize_text(user_text) != normalize_text(sent_text):
         return ""
-    return answer.strip()
+    return answer if answer.strip() else ""

@@ -1,7 +1,9 @@
 # NAS 安装与故障排查手册（公开版）
 
+[English](NAS-INSTALLATION.md) · [项目首页](README.md)
+
 本 Fork 基于 https://github.com/Octo-Lex/ChatGPT-Web2API ，保留原 MIT 许可证。
-仅验证过一台 amd64 NAS 的文本非流式调用，不是所有 NAS 的兼容承诺。
+已在一台 amd64 NAS 验证文本非流式及协议读取模式的真实业务请求，不是所有 NAS 的兼容承诺。
 192.168.1.100 是示例地址，请替换为自己的 NAS 地址。AMD64 Chrome 镜像不能直接用于 ARM。
 
 ## 1. 私有配置
@@ -52,6 +54,12 @@ W2A_API_KEYS=REPLACE_WITH_YOUR_OWN_RANDOM_API_KEY
 创建 `data/vnc-password.txt`，写入自己的 VNC 密码。传统 VNC 只使用前 8 个字符，桌面仅限可信局域网。
 整个 data 目录都是私有运行数据，不提交到 Git。
 
+### 回复读取模式
+
+在 `.env` 中设置 `W2A_REPLY_SOURCE=backend` 可启用本次 NAS 业务验收使用的模式：浏览器仍负责登录和发送，完成状态与完整正文直接从网页会话接口读取，并核对当前轮次。不读取回答 DOM，不在失败时退回页面抓取。正式会话 ID 长时间不可用、轮次不确定或超时会返回错误。
+
+未设置时默认 `reconciled`，使用完成检测后核对完整回复，严格条件下允许新会话页面回退。两种模式均已停止向客户端转发临时 DOM 增量；SSE 正文会等待最终核对。切换后需重新创建容器，代码更新需重建镜像。
+
 ## 2. 构建启动
 
 ```sh
@@ -59,7 +67,7 @@ sudo sh scripts/enable-nas-desktop.sh
 ```
 
 脚本先构建基础镜像再构建桌面镜像。构建失败时查看终端及本机 desktop-build.log。
-打开 `http://192.168.1.100:6080/vnc.html`，输入 VNC 密码，在浏览器里完成 ChatGPT 登录。
+打开 `http://192.168.1.100:6080/`（旧镜像可用 `/vnc.html`），输入 VNC 密码，在浏览器里完成 ChatGPT 登录。
 Chrome 同步登录和 ChatGPT 网站登录不同；网站可用时不必因同步提示而退出账号。
 桌面配置默认设置 `W2A_LOGIN_TIMEOUT_SECONDS=0`（可在 `.env` 改为正整数秒数），表示持续等待人工登录。登录前 API 尚未就绪；桌面页面可用不等于聊天 API 已就绪。
 
@@ -69,10 +77,10 @@ Chrome 同步登录和 ChatGPT 网站登录不同；网站可用时不必因同�
 ## 3. 验收与使用
 
 ```sh
-sudo docker compose -f compose.yaml -f compose.headed.yaml exec -T chatgpt-web2api python scripts/check-nas-api.py
+sudo docker compose -f compose.yaml -f compose.headed.yaml exec -T chatgpt-web2api python - < scripts/check-nas-api.py
 ```
 
-该命令只检查健康与模型。在末尾加 `--send` 才发送一次真实聊天，要求返回 OK。
+该命令从 NAS 目录传入脚本，只检查健康与模型，不依赖镜像内是否包含 scripts。需主动发送一次测试时，将 `python - <` 改成 `python - --send <`，要求返回 OK。
 API Base URL 为 `http://192.168.1.100:11111/v1`，模型 auto，先关闭流式。
 见 [API 接入手册](API使用与项目接入手册.md)。健康正常、HTTP200 都不能代替正文验收。
 
@@ -80,6 +88,8 @@ API Base URL 为 `http://192.168.1.100:11111/v1`，模型 auto，先关闭流式
 
 | 现象 | 检查方向 |
 |---|---|
+| 6080 显示目录列表 | 旧镜像缺少默认首页；先用 /vnc.html，新镜像已补入口 |
+| 检查脚本不存在 | 用上面的 stdin 传入方式，不必只为诊断脚本重新部署 |
 | apt-key 错误 | 是否使用本 Fork 的 Dockerfile |
 | Chrome 启动失败 | 容器日志、目录权限、profile 是否被另一实例占用 |
 | 无法联网 | 代理监听地址、HTTP/SOCKS 端口类型、NAS 网络 |
@@ -125,3 +135,10 @@ sudo docker compose -f compose.yaml -f compose.headed.yaml up -d --no-build
 人工登录后，模型目录返回21项；仅发送一次 auto、stream=false 的最小聊天请求，API 正文返回 OK，随后健康检查通过。
 
 此结果验证上述本机容器环境，不能替代其他 NAS 的实机兼容性测试。未验证流式、多客户端或长时间稳定性。
+
+
+## 8. 协议读取与真实业务验收（2026-09-20）
+
+回复完整性修复与 backend 模式共通过 146 项相关离线回归；本机单次合成 JSON 测试逐字一致。部署到 amd64 NAS 后，3 个固定业务样本分两轮执行，共 6 次请求、10 组作品结果通过 JSON、schema、case ID 和候选池校验；第二轮从审查页面触发，观察到进度与结果持久化，未自动采纳或修改正式作品关联。
+
+没有取得这些真实请求同轮协议原文的独立逐字对照，不能把 JSON 可解析等同于完整性已普遍证明。主音乐库登录后的展示未验收；长文本、多轮、高并发及长期稳定性仍待验证。模型对节选作品的语义判断问题需在业务侧处理，不属于接口拼接修复的保证范围。

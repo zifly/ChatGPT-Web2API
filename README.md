@@ -1,43 +1,68 @@
-# ChatGPT-Web2API — NAS deployment fork
+# ChatGPT-Web2API — NAS deployment and reply integrity fork
 
-Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API), baseline `497527dceabfa3f95961e23c291e618c5570f1ac`. Original MIT license and attribution retained.
+Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API), baseline `497527dceabfa3f95961e23c291e618c5570f1ac`. The original MIT license and attribution are retained. This is an unofficial community project, not the official OpenAI API.
 
-NAS-focused Docker/noVNC setup, cookie import compatibility fixes, and guarded response retrieval fixes. This is an unofficial community fork, not an official OpenAI API service.
+本 Fork 在上游网页转 API/MCP 功能上，补充 NAS 部署、远程桌面和回复完整性修复。浏览器仍负责登录与发送；新增模式直接从网页会话接口读取本轮完整回复，不是完全脱离浏览器的纯 HTTP 客户端。
 
-## Changes / 本 Fork 的改动
+## Documentation / 使用文档
 
-- Replace deprecated apt-key with a signed Chrome keyring.
-- Add headed Chrome with Xvfb/noVNC and password authentication.
-- Configure private persistent data, an optional proxy and explicit LAN binding.
-- Normalize exported cookies and verify CDP import acknowledgements.
-- Filter temporary WEB: conversation IDs before backend queries.
-- Add a guarded fresh-chat reply fallback and regression tests.
-- Provide Chinese deployment, troubleshooting and API integration guides.
+| Guide | 中文 | English |
+|---|---|---|
+| Installation, login and troubleshooting | [NAS 安装与排查](NAS安装与故障排查手册.md) | [NAS installation and troubleshooting](NAS-INSTALLATION.md) |
+| API setup, examples and limitations | [API 使用与接入](API使用与项目接入手册.md) | [API usage and integration](API-USAGE.md) |
 
-核心网页转 API、MCP、流式和限流机制来自上游。本 Fork 聚焦 NAS 部署与特定故障修复。
+## What this fork changes / 修改内容
 
-## Getting started / 开始使用
+The core API/MCP implementation, browser automation and turn-correlation machinery come from upstream. This fork adds:
 
-Read [中文安装与排查手册](NAS安装与故障排查手册.md), then [API 接入手册](API使用与项目接入手册.md).
-Create private data/api.env and data/vnc-password.txt. Set your NAS LAN IP in .env, then run:
+- **NAS deployment:** signed Google Chrome package keyring, explicit base/desktop images, persistent private data and configurable LAN binding. Both API and desktop ports default to loopback.
+- **Browser desktop:** Xvfb, x11vnc and noVNC with a password file. Port `6080/` opens the desktop client directly; `/vnc.html` remains supported. Desktop login can wait indefinitely, and startup handles stale Xvfb locks.
+- **Optional network settings:** official Debian/PyPI sources and no proxy by default. Build mirrors, build proxy and runtime proxy are separate options; mainland-China examples are optional.
+- **Cookie compatibility:** UTF-8 BOM and SameSite normalization, with CDP import acknowledgments checked.
+- **Conversation handling:** temporary `WEB:` IDs are not treated as server-issued conversation IDs; a guarded fresh-chat DOM fallback is available in the default reconciled mode.
+- **Reply integrity:** provisional DOM deltas are no longer exposed to API consumers. Final text replaces the entire provisional answer instead of merely adding a suffix. This addresses corruption when the webpage rewrites earlier characters during rendering.
+- **Backend-only reply mode:** `W2A_REPLY_SOURCE=backend` skips assistant DOM text and DOM completion detection. It polls the authenticated webpage conversation endpoint and returns only a completed reply matched to the current turn. Unresolved IDs, ambiguous/partial replies and deadlines fail explicitly; this mode never falls back to page text.
+
+我们修复的是采集层的丢字、重复和错误拼接，不是通过补括号或猜测 ID 修复 JSON。模型本身仍可能生成格式不合要求或语义错误的内容，调用方需要校验。
+
+## Quick start / 快速开始
+
+Follow the installation guide to create `.env`, `data/api.env` and `data/vnc-password.txt`. For the protocol-reading configuration tested on the NAS, set these in `.env` (replace the example IP):
+
+```dotenv
+W2A_BIND_ADDRESS=192.168.1.100
+W2A_REPLY_SOURCE=backend
+```
+
+Then run from the project directory on the NAS:
 
 ```sh
 sudo sh scripts/enable-nas-desktop.sh
 ```
 
-The script builds both images. Listeners default to loopback until W2A_BIND_ADDRESS is explicitly configured.
-Official Debian/PyPI sources and no proxy are the defaults. Optional mainland-China mirror/proxy examples are in the Chinese setup guide and `.env.example`; each setting is independent. Desktop mode waits for manual login without a five-minute timeout by default, and handles stale Xvfb locks on restart.
+Open `http://192.168.1.100:6080/` and log into ChatGPT. API base URL: `http://192.168.1.100:11111/v1`.
 
-No keys, cookies, Chrome profiles, VNC passwords or runtime logs are distributed.
+`backend` is opt-in; the code/Compose default is `reconciled`. Both modes retain the browser for login, model selection and sending. Both return verified complete text; SSE still uses SSE framing but buffers content until completion instead of delivering live tokens.
 
-## Validation / 验证范围
+默认仍为 `reconciled`；要使用本次 NAS 验收的协议读取方式，需明确设置 `W2A_REPLY_SOURCE=backend`。切换配置需要重建或重新创建相应容器，修改文件不会自动更新运行中的进程。
 
-Non-streaming text with model auto was verified on one amd64 NAS. An independent Linux/amd64 Docker Desktop installation was also built and started with optional TUNA mirrors and a proxy; after manual login, one non-streaming API test returned OK. Desktop restart was verified. The official-source path previously encountered network download failures and has not completed the same fresh-install acceptance. No claim of ARM support, universal compatibility or continuous availability.
+No API keys, cookies, Chrome profiles, VNC passwords or runtime logs are distributed. Keep `data/` and `.env` private.
 
-Images and original file uploads are not supported by this REST API. Streaming and multi-client operation have not been accepted on this NAS. The guarded DOM fallback has regression tests but has not been separately verified live.
+## Validation / 验证范围（2026-09-20）
 
-Internal retries may occur even if client retries are disabled. ChatGPT account limits and service terms still apply. Keep account credentials and the logged-in desktop private.
+- **146 related offline regression tests passed** for the combined integrity fix and backend-only reader.
+- A real isolated Chrome instance fetched a synthetic local conversation endpoint; protocol extraction preserved JSON, Unicode and whitespace while ignoring intentionally incorrect page text.
+- One isolated Docker Desktop request using backend mode returned a synthetic JSON document exactly as requested (about 9 seconds).
+- After deploying backend mode on one amd64 NAS, **six real business requests covering ten work-group results** passed JSON, schema, case-ID and candidate-pool checks. The second set of three requests was triggered through the actual review page, including progress and result display. Results remained pending review; formal music-library associations were not modified.
+- This was three fixed samples exercised in two rounds, not six independent datasets. No independent same-turn protocol-original/API-text comparison was captured for those business requests. Valid JSON and valid IDs alone do not prove universal verbatim integrity.
+- The review page was tested; the separate main-library page stopped at its administrator login, so its authenticated result display was not accepted. One excerpt-matching decision remained a business/prompt issue, separate from response corruption.
 
-## Upstream and license
+真实业务两轮测试通过，但长文本、多轮、高并发、长期稳定性以及 NAS 上的 SSE 路径尚未充分验收。上述结论不代表模型判断全部正确，也不代表所有场景都已验证。
 
-[Upstream README](https://github.com/Octo-Lex/ChatGPT-Web2API#readme) · [Fork changes](docs/NAS-FORK-CHANGES.md) · [MIT license](LICENSE)
+An earlier clean Docker Desktop installation passed using optional TUNA mirrors and a proxy, including manual login and restart. The official-source path encountered download failures and did not complete the same clean-install acceptance. ARM compatibility is not claimed.
+
+## Limits
+
+The REST interface currently accepts text, not image or original-file uploads. It does not implement Responses API, tool calling or enforced structured output. Reported `usage` values are placeholders. Internal retries elsewhere may still occur even when client retries are disabled. Account limits continue to apply.
+
+[Detailed fork changes](docs/NAS-FORK-CHANGES.md) · [Backend reply mode](docs/PROTOCOL-REPLY-EXPERIMENT.md) · [Upstream README](https://github.com/Octo-Lex/ChatGPT-Web2API#readme) · [MIT license](LICENSE)

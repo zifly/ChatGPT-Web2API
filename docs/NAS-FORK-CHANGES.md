@@ -14,3 +14,14 @@ Publication review v2 excludes historical capture/experiment scripts, protocol n
 ## 2026-09-20 installation follow-up
 
 Official package sources/no proxy remain the defaults; optional mirror and build/runtime proxy settings are independent. TUNA mirror builds and an isolated Docker Desktop startup/login/text request passed. Login waits can be indefinite in desktop mode, shutdown interrupts the wait, and stale Xvfb locks are checked on startup. Three regression tests cover login detection, finite timeout and shutdown. No private test profiles, keys or logs are included.
+
+
+## 2026-09-20 reply integrity and protocol mode
+
+The upstream baseline sliced DOM deltas using the previous snapshot length, and non-streaming concatenated them. Prefix rewrites could corrupt output; final suffix reconciliation could not repair it. This fork buffers progress and returns the entire correlated final text, retaining upstream turn anchors.
+
+Opt-in `W2A_REPLY_SOURCE=backend` bypasses assistant DOM text/completion and polls the authenticated conversation protocol for the anchored terminal reply. Browser login and sending remain necessary. It fails without a trustworthy final reply and never falls back to page text. Both modes buffer SSE content until final verification. The default remains `reconciled`; the tested NAS explicitly uses `backend`.
+
+146 related regressions and an exact local synthetic JSON request passed. Two NAS rounds over three fixed samples produced six requests/ten work-group results passing structure and candidate checks; the second round used the review UI. Same-turn protocol-original comparisons, broader concurrency and streaming acceptance remain outstanding. Formal library associations were unchanged; see README for validation limits.
+
+Complete Chinese/English installation and API guides include mode configuration, SSE behavior, acceptance limits and stdin diagnostics for images missing the check script. The noVNC root URL opens the desktop client directly.

@@ -182,15 +182,13 @@ async def test_has_action_fallback_without_conv_id(monkeypatch):
     )
     d._fetch_end_turn_for_turn = AsyncMock(return_value=TurnEndResult(status="matched"))  # should NOT be called
 
+    # A completion signal alone cannot identify a trustworthy final reply.
+    from chatgpt_web2api.turn_anchor import TurnReconciliationError
     chunks = []
-    async for chunk in d.send_and_stream("hello", timeout=10000):
-        chunks.append(chunk)
-
-    # Completed via has_action (the fallback), NOT end_turn (conv_id was empty)
-    deltas = [c.delta for c in chunks if c.delta]
-    assert any("Fallback answer" in c for c in deltas), f"deltas: {deltas}"
-    assert chunks[-1].finish_reason == "stop"
-    # end_turn was never consulted because conv_id_for_check was never set
+    with pytest.raises(TurnReconciliationError):
+        async for chunk in d.send_and_stream("hello", timeout=10000):
+            chunks.append(chunk)
+    assert chunks == []
     assert d._fetch_end_turn_for_turn.await_count == 0
 
 

@@ -523,7 +523,7 @@ class APIServer:
     async def _full_response(
         self, request: web.Request, model: str, text: str, timeout: float
     ) -> web.Response:
-        """Non-streaming: collect all chunks, return one JSON.
+        """Non-streaming: collect the driver's verified final reply, return one JSON.
 
         The send is wrapped in ``retry_on_rate_limit`` so a transient
         ChatGPT "Too many requests" pop-up is dismissed and retried
@@ -570,7 +570,7 @@ class APIServer:
     async def _stream_response(
         self, request: web.Request, model: str, text: str, timeout: float
     ) -> web.Response:
-        """Streaming: SSE chunks as they arrive.
+        """Streaming: SSE framing with content buffered until final verification.
 
         Rate-limit handling for streaming is split, because once
         ``resp.prepare()`` commits the HTTP 200 status we can no longer send a

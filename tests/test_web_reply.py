@@ -51,3 +51,8 @@ async def test_navigation_does_not_count_as_stable_reply(monkeypatch):
     ])
     monkeypatch.setattr("chatgpt_web2api.cdp_driver.asyncio.sleep", AsyncMock())
     assert await driver._read_confirmed_web_reply(PROMPT) == ""
+
+
+def test_preserves_code_whitespace():
+    text = '  {"id":"synthetic:a_b"}\n'
+    assert confirmed_web_reply(snapshot(text=text), PROMPT) == text

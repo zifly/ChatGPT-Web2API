@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -1596,7 +1597,8 @@ class CDPDriver:
         Polls briefly (3s at 0.5s intervals). Never raises.
         """
         import time as _time
-        from .chatgpt_dom import COMPOSER_SELECTOR, COMPOSER_FALLBACK_SELECTOR
+
+        from .chatgpt_dom import COMPOSER_FALLBACK_SELECTOR, COMPOSER_SELECTOR
 
         pre_send_count = getattr(self, "_pre_send_user_count", None)
         if pre_send_count is None:
@@ -1725,7 +1727,10 @@ class CDPDriver:
         budgets=None,
         model: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Send a message and yield streaming response chunks.
+        """Send a message, then yield the verified complete reply.
+
+        DOM progress is consumed internally. Both API modes buffer until
+        anchored final reconciliation; emitted text is never provisional.
 
         A2 turn-correlation sequence (peer-reviewed, conv ``6a482cfd``):
         1. Read assistant-count baseline (A1 fail-closed).
@@ -1743,6 +1748,12 @@ class CDPDriver:
         """
         from .identity_listener import hash_sent_text
         from .turn_anchor import TurnReconciliationError
+
+        reply_source = os.getenv("W2A_REPLY_SOURCE", "reconciled").strip().lower()
+        if reply_source not in ("reconciled", "backend"):
+            raise ValueError("W2A_REPLY_SOURCE must be reconciled or backend")
+        if timeout <= 0:
+            raise ValueError("Reply timeout must be positive")
 
         # PR4 belt-and-suspenders: refuse to mutate the DOM in parallel mode.
         self._assert_owned_tab_required()
@@ -1810,18 +1821,29 @@ class CDPDriver:
             # A2 Step 7: build the final anchor (fallback + captured UUID).
             turn_anchor = fallback_anchor.with_captured_id(captured_uuid)
 
+            if reply_source == "backend":
+                from .protocol_reply import read_protocol_reply
+
+                conv_id, final_text = await read_protocol_reply(self, turn_anchor, timeout)
+                self._current_conv_id = conv_id
+                yield StreamChunk(delta=final_text)
+                yield StreamChunk(delta="", finish_reason="stop")
+                return
+
             # A2 Step 8: stream + completion with the anchored turn.
             # P1: pass budgets + model for the model-aware two-state phase-2
             # machine. When None (no config available), the detector uses the
             # legacy single PHASE_STALL_SECONDS behavior.
-            async for chunk in self._completion.stream_until_complete(
+            async for _chunk in self._completion.stream_until_complete(
                 initial_count=initial_count,
                 timeout=timeout,
                 turn_anchor=turn_anchor,
                 budgets=budgets,
                 model=model,
             ):
-                yield chunk
+                # DOM snapshots can rewrite already observed prefixes. Never
+                # expose provisional deltas: ordinary SSE cannot retract them.
+                pass
 
             # Wait for a server-issued ID, not ChatGPT's WEB:<client UUID>
             # placeholder. The latter changes to an unrelated ID once saved.
@@ -1832,7 +1854,7 @@ class CDPDriver:
                     break
                 await asyncio.sleep(0.5)
 
-            if not conv_id and not self._completion.last_dom_text:
+            if not conv_id:
                 web_text = ""
                 if turn_anchor.mode == "fresh_chat" and initial_count == 0:
                     web_text = await self._read_confirmed_web_reply(text)
@@ -1849,7 +1871,6 @@ class CDPDriver:
             if conv_id:
                 logger.info("Conversation: %s", conv_id)
                 self._current_conv_id = conv_id
-                last_dom_text = self._completion.last_dom_text
                 had_non_text_content = self._completion.had_non_text_content
                 # A2: anchored final-text reconciliation. The selector resolves
                 # the terminal assistant text for THIS turn (by captured UUID
@@ -1862,9 +1883,9 @@ class CDPDriver:
                     last_status = result.status
                     last_diagnostic = result.diagnostic or {}
                     if result.status == "matched" and result.text:
-                        if len(result.text) > len(last_dom_text):
-                            yield StreamChunk(delta=result.text[len(last_dom_text):])
-                            last_dom_text = result.text
+                        # This is the completed, anchored reply, not a suffix
+                        # of a rendered snapshot. Preserve its exact contents.
+                        yield StreamChunk(delta=result.text)
                         break
                     if result.status == "non_text":
                         # P2.5 RCA fix: non_text is NOT terminal here. The backend
@@ -1888,7 +1909,7 @@ class CDPDriver:
                     # If the last status was non_text (genuinely non-text
                     # response after full polling), fall through to the
                     # placeholder below. Otherwise raise a typed error.
-                    if last_status != "non_text":
+                    if last_status != "non_text" or not had_non_text_content:
                         raise TurnReconciliationError(
                             conversation_id=conv_id,
                             anchor_mode=turn_anchor.mode,
@@ -1900,7 +1921,7 @@ class CDPDriver:
                             },
                         )
                 # Non-text placeholder (unchanged from pre-A2).
-                if not last_dom_text and had_non_text_content:
+                if last_status == "non_text" and had_non_text_content:
                     placeholder = (
                         "[Non-text response generated (image/tool-use/etc.) — "
                         "use get_conversation to retrieve full content.]"

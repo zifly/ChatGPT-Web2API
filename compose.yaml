@@ -19,6 +19,7 @@ services:
       - ./data/chrome-profile:/data/chrome-profile
       - ./data/cookies:/data/cookies:ro
     environment:
+      W2A_REPLY_SOURCE: "${W2A_REPLY_SOURCE:-reconciled}"
       W2A_HEADLESS: "true"
       W2A_PORT: "8080"
       W2A_HOST: "0.0.0.0"
