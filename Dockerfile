@@ -20,8 +20,11 @@ RUN mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
-RUN pip install --no-cache-dir .
+# Explicit inputs keep local credentials, profiles and reports out of all layers.
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+COPY scripts/check-nas-api.py ./scripts/check-nas-api.py
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 
 # Persistent Chrome profile (stores login session)
 VOLUME /data/chrome-profile

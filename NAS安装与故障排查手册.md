@@ -2,6 +2,8 @@
 
 [English](NAS-INSTALLATION.md) · [项目首页](README.md)
 
+不想在 NAS 上编译，可按[直接拉取镜像指南](docs/PREBUILT-IMAGE.md)使用独立的 `compose.image.yaml`。两种方式使用相同的私有配置；本手册后面的构建命令仅适用于源码安装。
+
 本 Fork 基于 https://github.com/Octo-Lex/ChatGPT-Web2API ，保留原 MIT 许可证。
 已在一台 amd64 NAS 验证文本非流式及协议读取模式的真实业务请求，不是所有 NAS 的兼容承诺。
 192.168.1.100 是示例地址，请替换为自己的 NAS 地址。AMD64 Chrome 镜像不能直接用于 ARM。

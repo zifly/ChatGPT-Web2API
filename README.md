@@ -8,6 +8,7 @@ Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API)
 
 | Guide | 中文 | English |
 |---|---|---|
+| Pull a prebuilt Docker image | [直接拉取镜像](docs/PREBUILT-IMAGE.md) | [Prebuilt image (bilingual)](docs/PREBUILT-IMAGE.md#english) |
 | Installation, login and troubleshooting | [NAS 安装与排查](NAS安装与故障排查手册.md) | [NAS installation and troubleshooting](NAS-INSTALLATION.md) |
 | API setup, examples and limitations | [API 使用与接入](API使用与项目接入手册.md) | [API usage and integration](API-USAGE.md) |
 | Backend-managed conversations | [后端会话接入](docs/CONVERSATION-API.md) | [Conversation integration (bilingual)](docs/CONVERSATION-API.md) |
@@ -29,6 +30,8 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 我们修复的是采集层的丢字、重复和错误拼接，不是通过补括号或猜测 ID 修复 JSON。模型本身仍可能生成格式不合要求或语义错误的内容，调用方需要校验。
 
 ## Quick start / 快速开始
+
+For installation without building on the NAS, use the [prebuilt image guide](docs/PREBUILT-IMAGE.md) and standalone `compose.image.yaml`. 镜像包含浏览器与远程桌面，直接拉取即可；仍需配置私有密码并登录自己的 ChatGPT 账号。The source-build workflow below remains available.
 
 Follow the installation guide to create `.env`, `data/api.env` and `data/vnc-password.txt`. For the protocol-reading configuration tested on the NAS, set these in `.env` (replace the example IP):
 
