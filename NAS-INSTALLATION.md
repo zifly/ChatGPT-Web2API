@@ -17,11 +17,48 @@ cp .env.example .env
 
 Set `W2A_BIND_ADDRESS` in `.env` to the NAS LAN IP to allow LAN access. The default binds published ports to `127.0.0.1` only.
 
-Create `data/api.env` with your own long random service key:
+### What is this API key, and how do I create it?
+
+This is a **service access password chosen by the deployer**. It is not issued by OpenAI and is not extracted from ChatGPT cookies or a Google account. It authorizes clients to call this bridge; the browser login determines the ChatGPT account used. The VNC password is a separate credential for the remote desktop.
+
+**For an existing installation, reuse the existing key; do not regenerate it just to connect a client.** It is stored in the project's `data/api.env`, under `W2A_API_KEYS`, which Compose reads when creating the container. Neither the image nor the repository supplies a shared default key, and restarting does not generate one.
+
+For a first installation, run this in the NAS project directory. It requires `openssl`, generates 32 random bytes as 64 hexadecimal characters, and refuses to overwrite an existing file:
+
+```sh
+mkdir -p data
+(
+    umask 077
+    set -C
+    service_key=$(openssl rand -hex 32) || exit 1
+    printf 'W2A_API_KEYS=%s\n' "$service_key" > data/api.env
+)
+```
+
+If `openssl` is unavailable, generate a value on a computer with Python 3, then manually create `data/api.env` on the NAS:
+
+```sh
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Use this format, replacing the placeholder with your own generated value:
 
 ```dotenv
 W2A_API_KEYS=REPLACE_WITH_YOUR_OWN_RANDOM_API_KEY
 ```
+
+In the client's **API Key** field, enter only the value after `=`, without `W2A_API_KEYS=` or the `Bearer ` prefix. The client sends `Authorization: Bearer <key>`. If multiple keys are comma-separated, choose one; separate keys do not provide per-user or per-conversation authorization.
+
+To rotate the key, wait for active requests to finish, edit `data/api.env`, then run **one** of the following commands for your installation method and update every client. A plain `docker restart` does not reload Compose's environment file:
+
+```sh
+# Prebuilt image
+sudo docker compose -f compose.image.yaml up -d --no-build --force-recreate
+# Source-built image
+sudo docker compose -f compose.yaml -f compose.headed.yaml up -d --no-build --force-recreate
+```
+
+Keep the key, `data/api.env` and expanded Compose configuration out of Git and issues. Do not clear `W2A_API_KEYS` to troubleshoot: an empty key list disables API key checking.
 
 Create `data/vnc-password.txt` containing your own VNC password. Traditional VNC uses only the first eight characters. Keep the desktop accessible only on a trusted network. The entire `data/` directory and `.env` contain private runtime configuration and must stay out of Git.
 

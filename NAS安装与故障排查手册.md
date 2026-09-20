@@ -21,6 +21,49 @@ cp .env.example .env
 需要代理时设置 W2A_PROXY_URL，填真实的 HTTP 代理端口，不要混用 SOCKS 端口。
 代理在 NAS 本机时可用 host.docker.internal，且代理应允许容器网络连接。
 
+### API Key 是什么，如何生成？
+
+这里的 API Key 是**部署者自己设置的 Web2API 服务访问密码**，不需要向 OpenAI 申请，也不从 ChatGPT Cookie 或 Google 账号中提取。它只决定谁能调用本服务；实际使用的 ChatGPT 账号由浏览器的登录状态决定。VNC 密码则用于打开远程桌面，是另一份凭据。
+
+**已有部署直接使用原密钥，不要为了查看或接入再次生成。** 密钥保存在项目的 `data/api.env` 中；Docker Compose 启动时读取其中的 `W2A_API_KEYS`。镜像和仓库不提供统一的默认密钥，也不会在每次启动时生成新密钥。
+
+仅首次安装时，可在 NAS 项目目录执行以下命令，生成 32 字节随机值（64 个十六进制字符），并写入私有文件。需要系统已有 `openssl`；如果文件已经存在，命令会拒绝覆盖：
+
+```sh
+mkdir -p data
+(
+    umask 077
+    set -C
+    service_key=$(openssl rand -hex 32) || exit 1
+    printf 'W2A_API_KEYS=%s\n' "$service_key" > data/api.env
+)
+```
+
+如果提示找不到 `openssl`，可以在装有 Python 3 的电脑上运行下面的命令，再手动将生成值写入 NAS 的 `data/api.env`：
+
+```sh
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+文件格式如下，必须将占位符替换为自己生成的值：
+
+```dotenv
+W2A_API_KEYS=REPLACE_WITH_YOUR_OWN_RANDOM_API_KEY
+```
+
+客户端的 **API Key** 配置框只填等号后的值，不填 `W2A_API_KEYS=`，也不填 `Bearer `。请求头由客户端发送为 `Authorization: Bearer <密钥值>`。如果配置了逗号分隔的多个密钥，客户端选其中一个；这些密钥不提供独立用户或会话权限隔离。
+
+需要更换密钥时，先等待在途任务完成，修改 `data/api.env`，再按你的部署方式选择下面**一条**命令重新创建容器（仅 `docker restart` 不会重新读取 Compose 的环境文件），并同步修改所有客户端保存的密钥：
+
+```sh
+# 拉取版
+sudo docker compose -f compose.image.yaml up -d --no-build --force-recreate
+# 源码构建版
+sudo docker compose -f compose.yaml -f compose.headed.yaml up -d --no-build --force-recreate
+```
+
+不要将密钥、`data/api.env` 或完整 Compose 展开配置提交到仓库、贴到 Issue；也不要通过清空 `W2A_API_KEYS` 来排查，因为空密钥列表会关闭接口的密钥校验。
+
 ### 构建镜像源和代理
 
 默认使用 Debian、Debian Security 和 PyPI 官方源，不启用构建或运行代理；Chrome 来自 Google 官方签名仓库。
@@ -46,12 +89,6 @@ W2A_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 若失败发生在 `FROM python:...` 的 Docker Hub 拉取阶段，说明尚未运行构建步骤，需要检查 Docker 守护进程或 Docker Desktop 的代理。`W2A_BUILD_PROXY_URL` 不负责基础镜像拉取。
 
 清华配置依据：[Debian 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/debian/) · [PyPI 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)。
-
-创建 `data/api.env`，填入自己生成的长随机密钥：
-
-```text
-W2A_API_KEYS=REPLACE_WITH_YOUR_OWN_RANDOM_API_KEY
-```
 
 创建 `data/vnc-password.txt`，写入自己的 VNC 密码。传统 VNC 只使用前 8 个字符，桌面仅限可信局域网。
 整个 data 目录都是私有运行数据，不提交到 Git。

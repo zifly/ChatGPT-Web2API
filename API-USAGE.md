@@ -21,6 +21,8 @@ For a base URL, stop at `/v1`. For a full endpoint, include `/chat/completions`.
 
 On Windows the shared key file is `\\NAS-HOST\docker\chatgpt-web2api\data\api.env`. Copy only the value after `=`, not the variable name. If keys are comma-separated, choose one. This is the service's access key, not an official OpenAI API key or your Google password.
 
+The deployer generates this key during initial setup; it is not exported from the website account and does not change on container restart. See [key creation and rotation](NAS-INSTALLATION.md#what-is-this-api-key-and-how-do-i-create-it). For an existing installation, obtain its current key from the administrator. Enter only the key value in the client field, without `Bearer `. The VNC password cannot authenticate API calls.
+
 The client must reach the NAS LAN. Another Docker container should use the NAS IP and published port 11111; its own `localhost` does not refer to this NAS service. Cloud-hosted clients normally need additional private networking to reach a LAN address.
 
 ## 2. Capabilities and limits
