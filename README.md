@@ -1,4 +1,4 @@
-# ChatGPT-Web2API — NAS deployment and reply integrity fork
+# chatgpt-web2api-nas — NAS deployment and reply integrity fork
 
 Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API), baseline `497527dceabfa3f95961e23c291e618c5570f1ac`. The original MIT license and attribution are retained. This is an unofficial community project, not the official OpenAI API.
 

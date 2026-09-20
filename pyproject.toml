@@ -37,10 +37,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zifly/ChatGPT-Web2API"
-Repository = "https://github.com/zifly/ChatGPT-Web2API"
+Homepage = "https://github.com/zifly/chatgpt-web2api-nas"
+Repository = "https://github.com/zifly/chatgpt-web2api-nas"
 Upstream = "https://github.com/Octo-Lex/ChatGPT-Web2API"
-Changelog = "https://github.com/zifly/ChatGPT-Web2API/blob/master/CHANGELOG.md"
+Changelog = "https://github.com/zifly/chatgpt-web2api-nas/blob/master/CHANGELOG.md"
 
 [project.scripts]
 chatgpt-web2api = "chatgpt_web2api.__main__:main"
