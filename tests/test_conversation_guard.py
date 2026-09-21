@@ -195,7 +195,7 @@ async def test_navigate_conversation_sets_id_only_on_verified_landing():
     """Happy path: composer ready AND url matches → _current_conv_id set."""
     d = CDPDriver(cdp_port=9222)
     cid = "abc-123"
-    d._cdp = AsyncMock()  # Page.navigate
+    d._cdp = AsyncMock(return_value={})  # Page.navigate
     # P2: navigate_conversation now uses _js_strict with a staged probe.
     # Return a ready state at the right URL on first poll.
     d._js_strict = AsyncMock(return_value=json.dumps({
@@ -203,6 +203,7 @@ async def test_navigate_conversation_sets_id_only_on_verified_landing():
         "ready_state": "complete",
         "app_shell": True,
         "composer": True,
+        "composer_usable": True,
     }))
     await d.navigate_conversation(cid)
     assert d._current_conv_id == cid
@@ -216,7 +217,7 @@ async def test_navigate_conversation_raises_and_clears_when_never_ready(monkeypa
     d = CDPDriver(cdp_port=9222)
     cid = "abc-123"
     d._current_conv_id = cid  # pre-existing (possibly stale) state
-    d._cdp = AsyncMock()
+    d._cdp = AsyncMock(return_value={})
     # P2: staged probe — composer never ready.
     d._js_strict = AsyncMock(return_value=json.dumps({
         "url": f"https://chatgpt.com/c/{cid}",
@@ -224,9 +225,11 @@ async def test_navigate_conversation_raises_and_clears_when_never_ready(monkeypa
         "app_shell": True,
         "composer": False,  # composer never appears
     }))
-    # Collapse the sleeps so the 30-iteration loop runs fast.
+    # Advance the navigation wall clock without waiting in real time.
+    clock = [0.0]
+    monkeypatch.setattr("chatgpt_web2api.cdp_driver.time.monotonic", lambda: clock[0])
     async def _fast(_s):
-        return None
+        clock[0] += _s
     monkeypatch.setattr("chatgpt_web2api.cdp_driver.asyncio.sleep", _fast)
 
     # P2: error message now names the failed stage instead of the old opaque msg.
@@ -258,6 +261,7 @@ async def test_rest_auto_continue_invokes_ensure_current(monkeypatch):
     server._config = srv.Config.load(None)
     server._breakers = srv.BreakerRegistry()  # Phase 4 PR2: preflight reads this
     server._last_error = None
+    server._browser_guard = srv.BrowserGuard()
     driver = MagicMock()
     driver._current_conv_id = "conv-rest-1"
     driver._current_model = None
@@ -271,7 +275,7 @@ async def test_rest_auto_continue_invokes_ensure_current(monkeypatch):
     reached = {"past_guard": False}
     async def _stub_response(*a, **kw):
         reached["past_guard"] = True
-        return MagicMock()
+        return srv.web.Response()
     server._full_response = _stub_response
     server._stream_response = _stub_response
 

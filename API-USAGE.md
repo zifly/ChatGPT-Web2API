@@ -2,7 +2,7 @@
 
 [中文](API使用与项目接入手册.md) · [README](README.md) · [NAS installation](NAS-INSTALLATION.md)
 
-Updated: 2026-09-20. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` are examples; replace them with your own addresses.
+Updated: 2026-09-21. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` are examples; replace them with your own addresses.
 
 ## 1. Connection settings
 
@@ -17,6 +17,8 @@ Updated: 2026-09-20. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` ar
 | Initial settings | `stream: false`, concurrency 1, automatic client retries disabled |
 | Client timeout | 180 seconds; this does not change the server timeout |
 
+REST now applies one server deadline (default 120 seconds) across queueing, navigation, uploads and replies. For tri-state submission errors, paused-browser health and the authenticated recovery endpoint, see [request deadlines and browser recovery](docs/REQUEST-RECOVERY.md).
+
 For a base URL, stop at `/v1`. For a full endpoint, include `/chat/completions`. Avoid duplicating `/v1`.
 
 On Windows the shared key file is `\\NAS-HOST\docker\chatgpt-web2api\data\api.env`. Copy only the value after `=`, not the variable name. If keys are comma-separated, choose one. This is the service's access key, not an official OpenAI API key or your Google password.
@@ -30,6 +32,7 @@ The client must reach the NAS LAN. Another Docker container should use the NAS I
 | Feature | Current behavior |
 |---|---|
 | Text requests | Minimal OK checks and synthetic structured samples passed |
+| Web citations | Optional `message.annotations` (`delta.annotations` for SSE); clients render the links. See [citation format and limits](docs/CITATIONS.md) |
 | Multi-turn text | History messages and custom `conversation_id` are implemented; see section 5 |
 | SSE | Content is buffered until final verification, not delivered token by token; synthetic NAS SSE image follow-up passed; broader streaming acceptance remains outstanding |
 | Images / `image_url` | PNG/JPEG/WebP Base64 upload in the last user message; [limits and example](docs/IMAGE-INPUT.md) |
@@ -245,6 +248,10 @@ This does not upload the original document file. Layout and table structure may 
 
 ## 7. Checks and error handling
 
+Non-streaming calls with an explicit conversation ID can perform bounded read-only navigation recovery within the same request. Success and failure responses include `request_diagnostics`; see [safe recovery and response examples](docs/SAFE-RECOVERY.md#english). Clients still submit once; REST rate limits do not replay the chat factory.
+
+See the [complete error-code reference](docs/ERROR-CODES.en.md) for HTTP statuses, codes, submission states, SSE errors, validation limits and recovery decisions. Some errors have no `code`; missing fields never imply permission to retry.
+
 - Health: `http://192.168.1.100:11111/health`
 - Models: `http://192.168.1.100:11111/v1/models`, with Bearer authentication
 - Desktop: `http://192.168.1.100:6080/` or `/vnc.html`
@@ -258,9 +265,11 @@ Inspect `chrome_running`, `driver_connected`, `last_error` and `open_breakers`. 
 | 400 | JSON shape and a user message in `messages` |
 | 401: Invalid API key / auth_error | Local service key |
 | 401: expired login / invalid_api_key details | Website authentication may have expired; inspect the desktop |
-| 429 | Respect `Retry-After`; internal backoff may already have occurred |
+| 429 | Respect `Retry-After`; REST returns the limit without replaying the chat, and clients must not retry automatically |
 | 503 | Error codes such as `lock_timeout` or `circuit_open`; inspect queueing and browser state |
-| 504 / reply_timeout | Reply deadline expired after submission (`prompt_sent=true`); inspect before resending |
+| 504 / reply_timeout | Final reply could not be confirmed in time; inspect `send_state` / `prompt_sent` and the webpage before resending |
+| 504 / navigation_timeout | The selected conversation did not become ready within its navigation budget; not sent; inspect `error.navigation` without automatic replay |
+| 502 / navigation_displaced, navigation_failed | The destination changed or navigation failed; not sent; no automatic replacement conversation |
 | 504 / image_upload_timeout | Upload was not confirmed (`prompt_sent=false`); inspect sanitized stage/state and the webpage |
 | 504 / generation_stuck | Generation stall, webpage state and proxy connectivity |
 | 500 or timeout | The message may already have been sent; inspect before retrying |

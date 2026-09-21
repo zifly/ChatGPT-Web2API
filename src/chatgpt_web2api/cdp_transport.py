@@ -149,23 +149,45 @@ class CDPTransport:
         """
         d = self._driver
         d._msg_id += 1
+        from .request_guard import CURRENT_REQUEST
+
+        state = CURRENT_REQUEST.get()
+        if state:
+            state.check()
+            timeout = min(timeout, state.remaining())
+            # REST recovery owns the attempt budget. Even pre-send commands
+            # may type or upload; never reconnect/replay them implicitly.
+            _retry = False
         mid = d._msg_id
         fut: asyncio.Future = asyncio.get_event_loop().create_future()
         d._pending[mid] = fut
         try:
             await d._ws.send(json.dumps({"id": mid, "method": method, "params": params or {}}))
-        except Exception as e:
+        except BaseException as e:
             d._pending.pop(mid, None)
-            if _retry and self._should_reconnect(e):
+            if state:
+                state.transport_uncertain = True
+            if _retry and isinstance(e, Exception) and self._should_reconnect(e):
                 logger.warning("CDP send failed (%s); reconnecting and retrying once", e)
                 await d.reconnect()
                 return await self._cdp(method, params, timeout, _retry=False)
             raise
         try:
-            return await asyncio.wait_for(fut, timeout)
+            result = await asyncio.wait_for(fut, timeout)
+            if state:
+                state.guard.responded()
+            return result
         except TimeoutError:
-            d._pending.pop(mid, None)
+            if state:
+                state.transport_uncertain = True
+                state.guard.timed_out()
             raise TimeoutError(f"CDP timeout: {method}")
+        except asyncio.CancelledError:
+            if state:
+                state.transport_uncertain = True
+            raise
+        finally:
+            d._pending.pop(mid, None)
 
     @staticmethod
     def _should_reconnect(exc: Exception) -> bool:

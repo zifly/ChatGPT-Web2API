@@ -118,6 +118,49 @@ Desktop mode defaults to `W2A_LOGIN_TIMEOUT_SECONDS=0`, which waits indefinitely
 
 Optionally place your Cookie-Editor JSON export at `data/cookies/cookies.json`. It is imported at startup if present; old cookies can overwrite newer session state. Do not share cookies or the Chrome profile, and do not let multiple Chrome instances use the same profile.
 
+<a id="login-recovery"></a>
+
+### Log in again and disable an old cookie import
+
+A fresh installation can use the remote browser on port 6080 directly; `cookies.json` is not required. If you previously imported cookies and now log in interactively, disable the old import file. The entrypoint imports it on every start and can overwrite your newer session. Preserve `data/chrome-profile`; do not delete the browser profile to refresh authentication.
+
+For an expired website session, upstream `401 token_expired`, or a service still using old credentials after login:
+
+1. Pause new client tasks and wait for active requests to finish. Reconcile uncertain submissions in the webpage before considering another send.
+2. In the NAS project directory, run the following to rename and retain the old cookie file. A missing file is skipped; an existing backup with the same name stops the command. The backup still contains credentials and must remain private.
+
+```sh
+sudo sh -eu <<'SH'
+if [ -f data/cookies/cookies.json ]; then
+    cookie_backup="data/cookies/cookies.json.disabled-$(date +%Y%m%dT%H%M%S)"
+    test ! -e "$cookie_backup"
+    mv data/cookies/cookies.json "$cookie_backup"
+fi
+SH
+```
+
+3. Open `http://NAS-HOST:6080/` (or `/vnc.html`), enter the password from `data/vnc-password.txt`, and log into **the ChatGPT website in the remote browser**. If it still shows an old session, sign out of that website and log back in. Logging in on your own computer or enabling Chrome sync does not replace this step.
+4. After login, choose **one** command matching your installation to restart the existing service and reload website credentials. This does not update the image or require a new service API key. The desktop disconnects briefly; reconnect after startup.
+
+```sh
+# Prebuilt image
+sudo docker compose -f compose.image.yaml restart chatgpt-web2api
+# Source-built image
+sudo docker compose -f compose.yaml -f compose.headed.yaml restart chatgpt-web2api
+```
+
+Use `docker-compose` on older systems. Restart is sufficient for this website-login refresh; changes to `.env` or `data/api.env` still require container recreation.
+
+5. Run read-only checks, then one generic chat test from your client before resuming business tasks. Source-installation checks are in section 3; prebuilt installations can use:
+
+```sh
+sudo docker compose -f compose.image.yaml exec -T chatgpt-web2api python /app/scripts/check-nas-api.py --wait 120
+```
+
+A visible composer, HTTP 200 from `/api/auth/session`, or a reachable health endpoint does not independently prove valid authentication. Currently `/v1/models` can return three default models when fetching the real catalog fails, so `Models: 3` or a passing read-only diagnostic is not chat acceptance. The actual catalog varies by account and website; do not require a fixed count. Health may show `starting` before any chat requests. Check browser connectivity, errors and pause state, and verify the actual test answer is complete.
+
+Do not restore the old import filename to repair a new login. The browser recovery probe checks responsiveness, not authentication. For a remaining 401, distinguish the bridge's service key from expired ChatGPT website credentials and inspect redacted diagnostics.
+
 ## 3. Read-only checks and one-message acceptance
 
 Run from the NAS project directory:
@@ -149,7 +192,7 @@ API base URL: `http://192.168.1.100:11111/v1`. Start with model `auto`, non-stre
 | Desktop root shows files | Use `/vnc.html`; newer images include a default homepage |
 | Diagnostic script missing in image | Use the standard-input check above; no rebuild is required just for that check |
 | Page answered but API failed | Check conversation ID and reply collection logs before sending again |
-| HTTP 401 | Distinguish the local service key from expired website authentication |
+| HTTP 401 / token_expired | Distinguish the local service key from expired website authentication; follow [login recovery](#login-recovery) |
 | HTTP 429 | Respect `Retry-After`; do not retry indefinitely |
 | HTTP 503/504 | Inspect lock waits, circuit breakers, generation stalls and network failures |
 | Invalid JSON or wrong candidate IDs | Reject the result and keep local evidence; do not guess missing characters |

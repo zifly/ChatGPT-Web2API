@@ -8,11 +8,12 @@ Design (peer-reviewed, conv ``6a482cfd``):
   - Fetch ``/backend-api/conversation/{id}?offset=0&limit={TURN_PROJECTION_LIMIT}``.
   - Status-decode: 401 → AuthExpiredError+trip, 404 → _Transient404, other → RuntimeError.
   - Project to compact schema preserving ALL nodes as graph skeletons:
-    drop heavy payload fields only (reasoning internals, tool metadata, citations,
+    drop heavy payload fields only (reasoning internals, tool metadata, snippets,
     assets), NOT the nodes themselves. Intermediary nodes (reasoning_recap,
     tool, system, unknown) must remain traversable.
   - Schema: {nodes: {id: {id, parent, children, role, create_time, end_turn,
-    content_type, text}}, current_node}.
+    content_type, text}}, current_node}. Terminal assistant text nodes also
+    have optional citation_references containing only compact web sources.
 
 The JS is executed via ``driver._js_with_data_strict(CONVERSATION_PROJECTION_JS, ...)``.
 The ``__D.conv_id`` and ``__D.token`` data slots are threaded by the caller
@@ -21,6 +22,8 @@ The ``__D.conv_id`` and ``__D.token`` data slots are threaded by the caller
 from __future__ import annotations
 
 import os
+
+from .citations import CITATION_PROJECTION_JS
 
 # Empirically validated (Phase 1, stress test 2): the correlated user/assistant
 # pair can fall outside the old limit=5 window for multi-step tool chains.
@@ -40,6 +43,7 @@ TURN_PROJECTION_LIMIT = int(os.getenv("W2A_TURN_PROJECTION_LIMIT", "50"))
 # decoded in ``_fetch_recent_conversation_projection``).
 CONVERSATION_PROJECTION_JS = """
 (async function() {
+  __CITATION_PROJECTION__
   try {
     var r = await fetch('/backend-api/conversation/' + __D.conv_id + '?offset=0&limit=' + __D.limit, {
       headers: {'Authorization': 'Bearer ' + __D.token},
@@ -77,6 +81,9 @@ CONVERSATION_PROJECTION_JS = """
         content_type: content.content_type || 'unknown',
         text: text
       };
+      if (author.role === 'assistant' && content.content_type === 'text' && msg.end_turn) {
+        projected[key].citation_references = projectCitations(msg.metadata);
+      }
     }
     return JSON.stringify({
       nodes: projected,
@@ -86,7 +93,7 @@ CONVERSATION_PROJECTION_JS = """
     return JSON.stringify({__error: String(e)});
   }
 })()
-""".strip()
+""".replace('__CITATION_PROJECTION__', CITATION_PROJECTION_JS).strip()
 
 
 # Schema documentation (for the fixture test + future maintainers).

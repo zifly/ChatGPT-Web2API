@@ -450,6 +450,9 @@ class ChatGPTDom:
                 break
             await asyncio.sleep(SEND_BUTTON_POLL_INTERVAL_S)
 
+        from .request_guard import send_attempted
+
+        send_attempted()
         result = await d._js(
             "(function() {"
             f"  var btn = document.querySelector('{SEND_BUTTON_SELECTOR}')"

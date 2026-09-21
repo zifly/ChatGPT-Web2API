@@ -2,7 +2,7 @@
 
 [English](API-USAGE.md) · [项目首页](README.md)
 
-更新日期：2026-09-20。适用于本 NAS Fork。192.168.1.100、NAS-HOST 都是示例，需替换。本文面向调用接口的项目；安装和修复见同目录《NAS安装与故障排查手册.md》。
+更新日期：2026-09-21。适用于本 NAS Fork。192.168.1.100、NAS-HOST 都是示例，需替换。本文面向调用接口的项目；安装和修复见同目录《NAS安装与故障排查手册.md》。
 
 ## 1. 接入参数
 
@@ -17,6 +17,8 @@
 | 初次接入 | `stream: false`，并发 1，关闭自动重试 |
 | 建议客户端超时 | 180 秒；这是客户端设置，不会修改服务端超时 |
 
+REST 现将排队、导航、上传和读取回复纳入同一服务端截止时间（默认 120 秒）。三态发送结果、浏览器暂停状态和带密钥的只读恢复接口，见[请求超时与浏览器恢复](docs/REQUEST-RECOVERY.md)。
+
 如果配置框要求 Base URL，填到 `/v1`；如果要求完整接口地址，填到 `/v1/chat/completions`。避免拼接成 `/v1/v1/chat/completions`。
 
 `data/api.env` 的 Windows 路径是 `\\NAS-HOST\docker\chatgpt-web2api\data\api.env`。只复制等号后的密钥值，不复制变量名；多个密钥用逗号分隔时，选其中一个。它是本服务的访问密钥，不是官方 OpenAI API Key，也不是 Google 密码。手册不包含真实密钥。
@@ -26,6 +28,8 @@ API Key 由部署者首次安装时自行生成，不是从网页账号导出，
 调用项目必须能访问 NAS 局域网。另一个 Docker 容器也用 NAS IP 和 11111 端口，不能用 `localhost` 指向 NAS。云端部署的项目通常不能直接访问 `192.168.1.100`，需要另行配置可达的私有网络。
 
 ## 2. 能做什么，不能做什么
+
+网页引用通过 `message.annotations` 返回（SSE 为 `delta.annotations`），需要客户端显示链接。正文保持原样，旧记录不会自动补齐来源。见[引用格式与限制](docs/CITATIONS.md)。
 
 | 功能 | 当前情况 |
 |---|---|
@@ -247,6 +251,10 @@ SDK 新建时传 `extra_body={"new_conversation": True}`，续聊时传 `extra_b
 
 ## 7. 检查与错误处理
 
+明确指定会话 ID 的非流式请求支持在原请求内有限重新确认导航就绪，成功和失败响应增加 `request_diagnostics`；见[安全恢复与完整响应示例](docs/SAFE-RECOVERY.md#中文)。后端仍只提交一次；REST 限流不再重放整个聊天函数。
+
+完整的 HTTP 状态、错误码、三态发送结果、SSE 错误、参数限制和恢复流程，见[错误码与后端处理手册](docs/ERROR-CODES.md)。部分错误没有 `code`；字段缺失不代表允许自动重试。
+
 健康地址：`http://192.168.1.100:11111/health`。模型地址：`http://192.168.1.100:11111/v1/models`（携带 Bearer 密钥）。远程浏览器：`http://192.168.1.100:6080/vnc.html`。
 
 健康检查重点看 `chrome_running`、`driver_connected`、`last_error`、`open_breakers`。模型列表可能来自回退列表；列表正常不能证明网页能发送消息。
@@ -258,9 +266,11 @@ SDK 新建时传 `extra_body={"new_conversation": True}`，续聊时传 `extra_b
 | 400 | JSON 是否正确、messages 是否包含 user 消息 |
 | 401 + Invalid API key / auth_error | 本服务 API Key 是否正确 |
 | 401 + 登录过期相关信息 / invalid_api_key | 也可能是 ChatGPT 网页登录失效，应查看网页，不能只换本地密钥 |
-| 429 | 查看 Retry-After，等限流解除；服务内部可能已做过退避重试 |
+| 429 | 查看 Retry-After，等限流解除；REST 不重放聊天，客户端也不要自动重试 |
 | 503 | 查看错误 code：lock_timeout、circuit_open 等；先处理排队、熔断或浏览器状态 |
-| 504 / reply_timeout | 已发送后等待回复超时（`prompt_sent=true`）；不要重发同一条消息 |
+| 504 / reply_timeout | 等待完整回复超时；按 `send_state` / `prompt_sent` 判断发送状态，先检查网页，不要直接重发 |
+| 504 / navigation_timeout | 指定会话未在导航预算内就绪；本轮未发送，查看 `error.navigation`，不要自动补发 |
+| 502 / navigation_displaced、navigation_failed | 目标页面被跳转或导航命令失败；本轮未发送，不自动另开会话 |
 | 504 / image_upload_timeout | 上传未确认（`prompt_sent=false`）；查看脱敏的上传阶段、状态和网页 |
 | 504 / generation_stuck | 生成停滞；检查网页是否卡住，以及代理网络 |
 | 500 或客户端超时 | 查看日志和网页，消息可能已发出；不要立即自动重发 |

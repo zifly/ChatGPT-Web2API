@@ -40,6 +40,7 @@ class StreamChunk:
 
     delta: str
     finish_reason: str | None = None
+    annotations: list[dict] | None = None
 
 
 # Conservative fallback wait (seconds) when ChatGPT's pop-up gives no exact
@@ -96,6 +97,51 @@ from .chatgpt_dom import (  # noqa: E402,F401
 # Stages (each must pass for the next to matter):
 #   url_correct → document_ready → app_shell_present → composer_present
 
+NAVIGATION_TIMEOUT_SECONDS = 30.0
+PREPARATION_BACKOFF_SECONDS = (5.0, 15.0)
+REPLY_RESERVE_SECONDS = 30.0
+NAVIGATION_PROBE_JS = """(function() {
+  const candidates = document.querySelectorAll(__SELECTORS__);
+  const usable = Array.from(candidates).some(el => {
+    const style = getComputedStyle(el);
+    return el.getClientRects().length > 0 && style.visibility !== 'hidden'
+      && style.display !== 'none' && !el.disabled && !el.readOnly
+      && el.getAttribute('aria-disabled') !== 'true'
+      && !el.closest('[inert]')
+      && (el.isContentEditable || el.tagName === 'TEXTAREA');
+  });
+  return JSON.stringify({
+    url: location.href, ready_state: document.readyState,
+    app_shell: !!document.querySelector('nav, [class*="sidebar"]'),
+    composer: candidates.length > 0, composer_usable: usable
+  });
+})()""".replace('__SELECTORS__', json.dumps(
+    COMPOSER_SELECTOR + ', ' + COMPOSER_FALLBACK_SELECTOR))
+
+# Fail closed on missing form/composer evidence. This probe never clears input,
+# removes attachments, navigates or sends. The URL stays inside the process.
+NAVIGATION_RECOVERY_PROBE_JS = """(() => {
+  const state = JSON.parse(__READINESS__);
+  const el = document.querySelector('#prompt-textarea');
+  const form = el && el.closest('form');
+  const empty = !!el && !(el.value || el.innerText || el.textContent || '').trim();
+  const busy = !!document.querySelector('[data-testid="stop-button"],button[aria-label="Stop generating"]');
+  const attachments = !form || !!form.querySelector('img,[role="group"][aria-label],[role="progressbar"],[aria-busy="true"]')
+    || Array.from(form.querySelectorAll('input[type="file"]')).some(input => !input.files || input.files.length > 0);
+  state.recovery_safe = !!form && empty && !busy && !attachments;
+  return JSON.stringify(state);
+})()""".replace('__READINESS__', NAVIGATION_PROBE_JS)
+
+
+class NavigationError(RuntimeError):
+    """A verified navigation failure, with no account or conversation data."""
+
+    def __init__(self, code: str, diagnostic: dict):
+        self.code = code
+        self.diagnostic = diagnostic
+        super().__init__(f"Conversation navigation failed: {code}; "
+                         f"stage={diagnostic['stage']}")
+
 @dataclass
 class NavigationReadinessProbe:
     """Results of a single navigation-readiness probe poll.
@@ -108,10 +154,11 @@ class NavigationReadinessProbe:
     ready_state: str
     app_shell_present: bool
     composer_present: bool
+    composer_usable: bool = False
 
     @property
     def document_ready(self) -> bool:
-        return self.ready_state == "complete"
+        return self.ready_state in ("interactive", "complete")
 
     def is_ready(self, url_correct: bool) -> bool:
         """All stages passed — page loaded AND composer ready AND URL matches.
@@ -124,6 +171,7 @@ class NavigationReadinessProbe:
             and self.document_ready
             and self.app_shell_present
             and self.composer_present
+            and self.composer_usable
         )
 
     def diagnostic_summary(self, url_correct: bool) -> str:
@@ -140,6 +188,8 @@ class NavigationReadinessProbe:
             return "app shell not present (ChatGPT nav/sidebar missing)"
         if not self.composer_present:
             return "composer not present (selector did not match after page loaded)"
+        if not self.composer_usable:
+            return "composer not usable (hidden, disabled or not editable)"
         return "all stages passed"
 
 
@@ -1280,111 +1330,207 @@ class CDPDriver:
         return await self._dom._wait_for_composer(timeout)
 
     async def navigate_conversation(self, conversation_id: str) -> None:
-        """Navigate to an existing conversation for multi-turn.
+        """Navigate at most once; REST may subsequently recheck the same page."""
+        from .request_guard import CURRENT_REQUEST
 
-        Sets ``self._current_conv_id`` ONLY after the live tab is verified
-        to be at ``/c/{conversation_id}`` with the composer ready. On a
-        verified failure (wrong landing URL, or readiness never observed)
-        clears any stale ``_current_conv_id`` matching the request and
-        raises — never admits an unverified conversation as current. This
-        is the invariant the auto-continue paths depend on: ``_current_conv_id``
-        means "the live tab is here", not "we attempted to go here".
+        state = CURRENT_REQUEST.get()
+        target = self._target_id
+        socket = self._ws
 
-        P2 (2026-07-09): the readiness poll is now staged — it probes
-        url → document.readyState → app shell → composer in one JS call
-        and captures which stage failed. The error message names the stage
-        instead of the old opaque "did not reach a ready composer." Also
-        fast-fails with ``nav_displaced`` if the URL moves away from the
-        target mid-poll (detects SPA redirects / access-denied states).
-        """
-        url = f"https://chatgpt.com/c/{conversation_id}"
-        logger.info("Navigate to conversation: %s", url)
-        await self._cdp("Page.navigate", {"url": url})
-        await asyncio.sleep(3)
+        def eligible():
+            if not state or not state.allow_preparation_recovery:
+                return False
+            state.check()
+            self._assert_owned_tab_required()
+            return (state.send_attempt_count == 0 and state.send_state == 'not_sent'
+                    and state.phase == 'navigation' and not state.transport_uncertain
+                    and bool(target) and self._target_id == target and socket is not None
+                    and self._ws is socket and not getattr(self, '_pending_image_names', [])
+                    and not (self._breakers and self._breakers.first_open()))
 
-        # P2: staged readiness probe. Evaluates all stages in one JS call
-        # (no extra round-trips). Uses _js_strict so transient JS failures
-        # are visible (logged) rather than silently burning poll iterations.
-        probe_js = (
-            "(function() {"
-            "  return JSON.stringify({"
-            "    url: location.href,"
-            "    ready_state: document.readyState,"
-            f"    app_shell: !!document.querySelector('nav') || !!document.querySelector('[class*=\"sidebar\"]'),"
-            f"    composer: !!document.querySelector('{COMPOSER_SELECTOR}') || !!document.querySelector('{COMPOSER_FALLBACK_SELECTOR}')"
-            "  });"
-            "})()"
-        )
-
-        last_probe: NavigationReadinessProbe | None = None
-        last_js_error: str | None = None
-        url_was_correct = False  # track if URL was ever correct (for displacement)
-        displacement_count = 0  # P2 review: debounce — require 2 consecutive wrong polls
-
-        for _ in range(30):
+        async def safe_probe():
+            if not eligible():
+                return False
             try:
-                result = await self._js_strict(probe_js)
-                data = json.loads(result)
-                last_js_error = None  # successful probe clears the error
-            except Exception as e:
-                # P2: log transient JS failures instead of silently swallowing.
-                # Distinguish "probe execution failed" from "stage failed" per
-                # ChatGPT review finding C.
-                last_js_error = str(e)
-                logger.debug("Navigation probe JS failed (will retry): %s", e)
-                await asyncio.sleep(0.5)
-                continue
+                raw = await self._js_strict(NAVIGATION_RECOVERY_PROBE_JS, timeout=5)
+                value = json.loads(raw)
+                return (eligible() and isinstance(value, dict)
+                        and value.get('recovery_safe') is True
+                        and self._is_url_at_conversation(value.get('url', ''), conversation_id))
+            except (CDPJSError, ValueError, TypeError, TimeoutError):
+                return False
 
-            probe = NavigationReadinessProbe(
-                url=data.get("url", ""),
-                ready_state=data.get("ready_state", ""),
-                app_shell_present=bool(data.get("app_shell")),
-                composer_present=bool(data.get("composer")),
-            )
-            last_probe = probe
-            url_correct = self._is_url_at_conversation(probe.url, conversation_id)
+        for attempt in range(3):
+            try:
+                await self._navigate_conversation_once(conversation_id, read_only=attempt > 0,
+                                                       pinned_target=target, pinned_socket=socket)
+                return
+            except NavigationError as exc:
+                if exc.code != 'navigation_timeout' or not eligible():
+                    raise
+                if attempt == 2:
+                    state.terminal_reason = 'attempts_exhausted'
+                    raise
+                delay = PREPARATION_BACKOFF_SECONDS[attempt]
+                required = delay + NAVIGATION_TIMEOUT_SECONDS + REPLY_RESERVE_SECONDS
+                if state.remaining() < required:
+                    state.terminal_reason = 'insufficient_budget'
+                    raise
+                if not await safe_probe():
+                    raise
+                # Hold the mutation lock throughout: never abandon the page
+                # and assume another client left it unchanged when we return.
+                await asyncio.sleep(delay)
+                if not await safe_probe():
+                    raise
+                if state.remaining() < NAVIGATION_TIMEOUT_SECONDS + REPLY_RESERVE_SECONDS:
+                    state.terminal_reason = 'insufficient_budget'
+                    raise
+                state.preparation_attempt_count += 1
+                state.retry_codes.append(exc.code)
+                logger.info('Preparation recovery: request_id=%s attempt=%d code=%s',
+                            state.request_id, state.preparation_attempt_count, exc.code)
 
-            # P2: fast-fail on URL displacement with debounce (review finding B).
-            # If the URL was correct on a prior poll but is now wrong, the page
-            # may have navigated away (SPA redirect, access denied, conversation
-            # deleted). Require 2 CONSECUTIVE wrong-URL polls to avoid
-            # false-positive on SPA route normalization / param stripping.
-            if url_correct:
-                url_was_correct = True
-                displacement_count = 0
-            elif url_was_correct:
-                displacement_count += 1
-                if displacement_count >= 2:
-                    if self._current_conv_id == conversation_id:
-                        self._current_conv_id = None
-                    raise RuntimeError(
-                        f"Navigation to {conversation_id} displaced — URL moved "
-                        f"to {probe.url[:80]} after initially loading (nav_displaced)"
-                    )
+    async def _navigate_conversation_once(self, conversation_id: str, *, read_only=False,
+                                         pinned_target=None, pinned_socket=None) -> None:
+        """Reuse a verified current conversation or navigate once, within 30s.
 
-            if probe.is_ready(url_correct):
-                logger.info("Conversation ready: %s", probe.url)
-                break
-            await asyncio.sleep(0.5)
-        else:
-            # Loop exhausted without a verified landing. Clear any stale
-            # state and raise with P2 staged diagnostics.
-            if self._current_conv_id == conversation_id:
-                self._current_conv_id = None
-            if last_probe is not None:
-                url_correct = self._is_url_at_conversation(last_probe.url, conversation_id)
-                stage = last_probe.diagnostic_summary(url_correct)
-                raise RuntimeError(
-                    f"Navigation to {conversation_id} failed after 15s — "
-                    f"stage: {stage}"
-                )
-            raise RuntimeError(
-                f"Navigation to {conversation_id} failed — all probes errored "
-                f"(no readiness data obtained, last_js_error={last_js_error})"
-            )
+        Require two consecutive ready probes of the exact destination. Interactive
+        documents are usable only with an app shell and visible editable composer.
+        REST's outer request deadline still takes precedence over this budget.
+        """
+        from .request_guard import CURRENT_REQUEST
 
-        await asyncio.sleep(1)
-        self._current_conv_id = conversation_id
+        started = time.monotonic()
+        deadline = started + NAVIGATION_TIMEOUT_SECONDS
+        last_probe = None
+        probe_error = None
+        previous_id = self._current_conv_id
+        self._current_conv_id = None  # cancellation/failure must not retain stale state
+        url_was_correct = False
+        displacement_count = 0
+        ready_count = 0
+        reused = False
+
+        def diagnostic():
+            correct = bool(last_probe and self._is_url_at_conversation(
+                last_probe.url, conversation_id))
+            stage = 'probe_unavailable'
+            if last_probe:
+                if not correct:
+                    stage = 'url_mismatch'
+                elif not last_probe.document_ready:
+                    stage = 'document_loading'
+                elif not last_probe.app_shell_present:
+                    stage = 'app_shell_missing'
+                elif not last_probe.composer_present or not last_probe.composer_usable:
+                    stage = 'composer_unavailable'
+                else:
+                    stage = 'stability_check'
+            return {'stage': stage, 'url_matches': correct,
+                    'ready_state': last_probe.ready_state if last_probe else None,
+                    'app_shell_present': last_probe.app_shell_present if last_probe else False,
+                    'composer_present': last_probe.composer_present if last_probe else False,
+                    'composer_usable': last_probe.composer_usable if last_probe else False,
+                    'probe_error': probe_error,
+                    'elapsed_ms': round((time.monotonic() - started) * 1000)}
+
+        async def read_probe():
+            nonlocal last_probe, probe_error
+            state = CURRENT_REQUEST.get()
+            if state:
+                state.check()
+            if read_only:
+                self._assert_owned_tab_required()
+                if (self._target_id != pinned_target or self._ws is not pinned_socket
+                        or (self._breakers and self._breakers.first_open())):
+                    raise OwnedTabRequiredError('Recovery page ownership or protection changed')
+            try:
+                raw = await self._js_strict(
+                    NAVIGATION_RECOVERY_PROBE_JS if read_only else NAVIGATION_PROBE_JS,
+                    timeout=min(15, max(0.001, deadline - time.monotonic())))
+                data = json.loads(raw)
+                if not isinstance(data, dict) or not isinstance(data.get('url'), str):
+                    raise ValueError('Invalid navigation probe')
+                ready_state = data.get('ready_state')
+                if ready_state not in ('loading', 'interactive', 'complete'):
+                    raise ValueError('Invalid document state')
+                last_probe = NavigationReadinessProbe(
+                    data['url'], ready_state, data.get('app_shell') is True,
+                    data.get('composer') is True, data.get('composer_usable') is True)
+                if read_only:
+                    if self._target_id != pinned_target or self._ws is not pinned_socket:
+                        raise OwnedTabRequiredError('Recovery page ownership changed during probe')
+                    if not self._is_url_at_conversation(last_probe.url, conversation_id):
+                        raise NavigationError('navigation_displaced', diagnostic())
+                    if data.get('recovery_safe') is not True:
+                        raise NavigationError('navigation_failed', diagnostic())
+                probe_error = None
+                return last_probe
+            except (CDPJSError, ValueError, TypeError):
+                # No raw JS payload/errors: they may contain page/account data.
+                last_probe = None
+                probe_error = 'readiness_probe_failed'
+                return None
+
+        scope = asyncio.timeout(NAVIGATION_TIMEOUT_SECONDS)
+        try:
+            async with scope:
+                # Only reuse a tab whose cached identity AND current live route
+                # agree. A stale/missing identity still takes the verified nav path.
+                if read_only:
+                    reused = True  # Only readiness reads are allowed after the first attempt.
+                elif previous_id == conversation_id:
+                    probe = await read_probe()
+                    reused = bool(probe and self._is_url_at_conversation(
+                        probe.url, conversation_id))
+                if not reused:
+                    state = CURRENT_REQUEST.get()
+                    if state:
+                        state.check()
+                    result = await self._cdp(
+                        'Page.navigate',
+                        {'url': f'https://chatgpt.com/c/{urllib.parse.quote(conversation_id, safe="")}'},
+                        timeout=min(15, max(0.001, deadline - time.monotonic())),
+                        _retry=False)
+                    if result.get('error') or result.get('result', {}).get('errorText'):
+                        raise NavigationError('navigation_failed', diagnostic())
+                else:
+                    url_was_correct = True
+
+                while time.monotonic() < deadline:
+                    probe = await read_probe()
+                    if probe is not None:
+                        correct = self._is_url_at_conversation(probe.url, conversation_id)
+                        if correct:
+                            url_was_correct = True
+                            displacement_count = 0
+                        elif url_was_correct:
+                            displacement_count += 1
+                            if displacement_count >= 2:
+                                raise NavigationError('navigation_displaced', diagnostic())
+                        ready_count = ready_count + 1 if probe.is_ready(correct) else 0
+                        if ready_count >= 2:
+                            state = CURRENT_REQUEST.get()
+                            if state:
+                                state.check()
+                            self._current_conv_id = conversation_id
+                            logger.info('Conversation ready: reused=%s elapsed_ms=%d',
+                                        reused, (time.monotonic() - started) * 1000)
+                            return
+                    else:
+                        ready_count = 0
+                        displacement_count = 0
+                    await asyncio.sleep(min(0.5, max(0, deadline - time.monotonic())))
+                raise NavigationError('navigation_timeout', diagnostic())
+        except TimeoutError:
+            if not scope.expired():
+                # A CDP command timeout keeps its transport error classification.
+                raise
+            raise NavigationError('navigation_timeout', diagnostic()) from None
+        except NavigationError as exc:
+            logger.warning('Navigation failed: code=%s diagnostic=%s', exc.code, exc.diagnostic)
+            raise
 
     @staticmethod
     def _is_url_at_conversation(url: str, conversation_id: str) -> bool:
@@ -1402,7 +1548,7 @@ class CDPDriver:
             parsed = urllib.parse.urlparse(url)
         except ValueError:
             return False
-        if "chatgpt.com" not in (parsed.netloc or "").lower():
+        if parsed.scheme != "https" or parsed.hostname != "chatgpt.com":
             return False
         parts = [p for p in parsed.path.split("/") if p]
         # Find the ("c", conversation_id) adjacent pair — the conversation
@@ -1760,6 +1906,9 @@ class CDPDriver:
         self._assert_owned_tab_required()
         # An interrupted upload must not leak into a later text request.
         from .image_upload import clear_pending_images, upload_images
+        from .request_guard import cleanup_allowed, phase, send_confirmed
+
+        phase('prepare')
         await clear_pending_images(self)
         send_started = time.monotonic()
         # A1: count existing assistants BEFORE sending (fail-closed baseline).
@@ -1783,8 +1932,10 @@ class CDPDriver:
 
         try:
             # Type and send.
+            phase('input')
             await self.type_message(text)
             if images:
+                phase('upload')
                 from .image_input import ImageUploadError
                 try:
                     await upload_images(self, images, timeout=min(90, timeout))
@@ -1793,12 +1944,15 @@ class CDPDriver:
                 timeout -= time.monotonic() - send_started
                 if timeout <= 0:
                     raise ImageUploadError("Request deadline expired during image upload; no prompt was sent")
+            phase('send_ready')
             await self.click_send()
 
             # A2 Step 6: wait for the IdentityListener to capture the UUID.
             captured_uuid = None
             if capture_scope is not None:
                 captured_uuid = await self._identity_listener.wait_for_captured_uuid(timeout=5.0)
+            if captured_uuid:
+                send_confirmed()
 
             # P0 send acknowledgment (ChatGPT review, conv 6a52f0f3):
             # click_send dispatches synthetic mouse events — that proves the
@@ -1817,6 +1971,8 @@ class CDPDriver:
             if not captured_uuid:
                 try:
                     acknowledged = await self._verify_send_acknowledged()
+                    if acknowledged is True:
+                        send_confirmed()
                     if acknowledged is False:  # explicitly False, not None
                         raise SendReadinessError(
                             "Send not acknowledged — click dispatched but no user "
@@ -1834,13 +1990,15 @@ class CDPDriver:
 
             # A2 Step 7: build the final anchor (fallback + captured UUID).
             turn_anchor = fallback_anchor.with_captured_id(captured_uuid)
+            phase('reply')
 
             if reply_source == "backend":
                 from .protocol_reply import read_protocol_reply
 
-                conv_id, final_text = await read_protocol_reply(self, turn_anchor, timeout)
+                conv_id, final_text, annotations = await read_protocol_reply(self, turn_anchor, timeout)
+                send_confirmed()
                 self._current_conv_id = conv_id
-                yield StreamChunk(delta=final_text)
+                yield StreamChunk(delta=final_text, annotations=annotations)
                 yield StreamChunk(delta="", finish_reason="stop")
                 return
 
@@ -1899,7 +2057,8 @@ class CDPDriver:
                     if result.status == "matched" and result.text:
                         # This is the completed, anchored reply, not a suffix
                         # of a rendered snapshot. Preserve its exact contents.
-                        yield StreamChunk(delta=result.text)
+                        send_confirmed()
+                        yield StreamChunk(delta=result.text, annotations=result.annotations)
                         break
                     if result.status == "non_text":
                         # P2.5 RCA fix: non_text is NOT terminal here. The backend
@@ -1945,7 +2104,7 @@ class CDPDriver:
             # A2 Step 9: ALWAYS clear the capture scope (failure-mode E).
             if capture_scope is not None:
                 capture_scope.close()
-            if images:
+            if images and cleanup_allowed():
                 try:
                     await clear_pending_images(self)
                 except Exception:

@@ -31,7 +31,7 @@ async def test_delayed_id_and_incomplete_backend(monkeypatch):
     d._conversation_id_from_url = AsyncMock(side_effect=["", "server-id", "server-id"])
     d._fetch_text_for_turn = AsyncMock(side_effect=[TurnTextResult("not_ready",text="partial"), TurnTextResult("matched",text="complete")])
     anchor = TurnAnchor(sent_text="request", mode="fresh_chat")
-    assert await read_protocol_reply(d, anchor, 1) == ("server-id", "complete")
+    assert await read_protocol_reply(d, anchor, 1) == ("server-id", "complete", [])
     assert d._fetch_text_for_turn.await_count == 2
 
 

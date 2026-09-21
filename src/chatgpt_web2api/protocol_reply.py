@@ -9,7 +9,16 @@ from .turn_anchor import TurnReconciliationError
 logger = logging.getLogger(__name__)
 
 
-async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]:
+def _record_read_recovery():
+    from .request_guard import CURRENT_REQUEST
+
+    state = CURRENT_REQUEST.get()
+    if state:
+        state.check()
+        state.reply_recovery_attempt_count += 1
+
+
+async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str, list[dict]]:
     """Poll the conversation protocol until this anchored turn is complete.
 
     The browser still performs login and the original send. Only read-only
@@ -28,6 +37,7 @@ async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]
                     last_status = "conversation_id_read_timeout"
                     logger.warning("Protocol URL read timed out; retrying read within reply deadline")
                     await asyncio.sleep(1)
+                    _record_read_recovery()
                     continue
                 if current_id:
                     expected_id = conversation_id or anchor.conversation_id_at_capture
@@ -49,10 +59,11 @@ async def read_protocol_reply(driver, anchor, timeout: float) -> tuple[str, str]
                         last_status = "fetch_timeout"
                         logger.warning("Protocol result read timed out; retrying read within reply deadline")
                         await asyncio.sleep(1)
+                        _record_read_recovery()
                         continue
                     last_status = result.status
                     if result.status == "matched" and isinstance(result.text, str) and result.text.strip():
-                        return conversation_id, result.text
+                        return conversation_id, result.text, result.annotations
                     if result.status == "auth_failed":
                         from .cdp_driver import AuthExpiredError
                         raise AuthExpiredError("Protocol reply authentication failed")

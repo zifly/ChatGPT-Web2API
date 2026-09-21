@@ -188,6 +188,7 @@ async def test_rest_post_lock_check_catches_race(monkeypatch):
     server._parallel_tabs = False  # PR4: mirror __init__'s cache for __new__ bypass
     server._config = srv.Config.load(None)
     server._last_error = None
+    server._browser_guard = srv.BrowserGuard()
     reg = BreakerRegistry()
     server._breakers = reg
 
@@ -270,6 +271,7 @@ async def test_rest_auth_recovery_probes_then_proceeds(monkeypatch):
     server._parallel_tabs = False  # PR4: mirror __init__'s cache for __new__ bypass
     server._config = srv.Config.load(None)
     server._last_error = None
+    server._browser_guard = srv.BrowserGuard()
     server._last_successful_send_at = None
     reg = BreakerRegistry()
     reg.trip(BreakerKind.AUTH_EXPIRED, "401", cooldown_s=0)
@@ -352,6 +354,7 @@ async def test_rest_auth_recovery_fails_still_fail_fasts():
     server._parallel_tabs = False  # PR4: mirror __init__'s cache for __new__ bypass
     server._config = srv.Config.load(None)
     server._last_error = None
+    server._browser_guard = srv.BrowserGuard()
     reg = BreakerRegistry()
     reg.trip(BreakerKind.AUTH_EXPIRED, "401", cooldown_s=0)
     server._breakers = reg

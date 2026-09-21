@@ -19,7 +19,7 @@
 
 先使用非流式、并发 1、客户端超时 180 秒并关闭自动重试。服务最多等待上传确认 90 秒，再用剩余请求预算等待回答。上传失败不会发送问题，非流式图片请求不会通过限流重试器自动重发。底层其他机制不构成端到端“最多发送一次”的保证。
 
-新版非流式接口将上传等待超时标记为 HTTP 504、`error.code=image_upload_timeout`、`error.prompt_sent=false`，并给出脱敏的阶段和预览状态。`reply_timeout` 则表示已发送后等待完整回复超时，`prompt_sent=true`；不能因此重发同一条消息。两者都应先检查网页与日志。单次只读 CDP 超时会在原有总时限内重试读取，不重复上传或点击发送。
+新版非流式接口将上传等待超时标记为 HTTP 504、`error.code=image_upload_timeout`、`error.prompt_sent=false`，并给出脱敏的阶段和预览状态。`reply_timeout` 表示等待完整回复超时；以 `send_state` 和 `prompt_sent` 的三态结果判断是否已确认提交，不确定时不能重发。两者都应先检查网页与日志。单次只读 CDP 超时会在原有总时限内重试读取，不重复上传或点击发送。
 
 服务会创建随机文件名的临时图片，上传等待结束后清理本地临时文件。失败时尝试移除网页中未发送的附件；如果清理未确认，后续发送会再次检查。上传到 ChatGPT 的文件和会话按网站本身的行为保留，本地清理不代表删除网站上的文件。
 
@@ -112,7 +112,7 @@ The deployment's first immediate diagnostic ran before API startup completed and
 
 ### Timeout diagnostics / 超时诊断
 
-For non-streaming requests, `504 image_upload_timeout` includes `error.prompt_sent=false` and a sanitized upload stage/state. `504 reply_timeout` includes `error.prompt_sent=true`: submission already occurred, so inspect before resending. Read timeouts are retried only inside the existing overall deadline, without replaying the upload or send. SSE responses that already started cannot change their HTTP status; their stream error still needs to be handled.
+For non-streaming requests, `504 image_upload_timeout` includes `error.prompt_sent=false` and a sanitized upload stage/state. `504 reply_timeout` means the final reply was not confirmed in time; inspect the tri-state `send_state` / `prompt_sent` fields before considering a resend. Read timeouts are retried only inside the existing overall deadline, without replaying the upload or send. SSE responses that already started cannot change their HTTP status; their stream error still needs to be handled.
 
 Upload diagnostics contain counts, preview categories and readiness flags, not filenames, signed URLs, image bytes or prompt text. A persistent local `blob` preview alone is still not accepted as proof that the remote upload completed.
 
@@ -121,3 +121,8 @@ Upload diagnostics contain counts, preview categories and readiness flags, not f
 153 related offline tests passed, including transient read timeouts, overall deadlines, cancellation, single-send behavior and sanitized upload errors. On one amd64 NAS, four sequential synthetic requests passed: fresh text (20 s), explicit-ID text continuation (23 s), a synthetic JPEG page (43 s) and text follow-up in that image conversation (18 s). All returned HTTP 200 with `finish_reason=stop`; the final health check was healthy with no recorded error. No automatic client retry was used.
 
 153 项相关离线测试通过；一台 amd64 NAS 上的合成文字、新建 JPEG 识图及指定 ID 续聊四项均通过。测试仅使用合成页面、通用问题和虚构编号。此次确认了读取超时恢复和上述最小调用流程，不能据此认定所有实际图片的上传超时原因均已解决；新增阶段诊断用于继续定位此类问题。
+
+
+### End-to-end request guard / 整次请求保护
+
+REST now shares one deadline across queueing, navigation, upload and reply reading. Interrupted or uncertain submissions can pause browser operations; see [request deadlines and read-only recovery](REQUEST-RECOVERY.md). REST 现在按整次请求计时；点击超时可能已发送，不能按上传失败处理。恢复方式见同一份双语说明。

@@ -133,6 +133,7 @@ class TurnTextResult:
     status: TextStatus
     text: str | None = None
     diagnostic: dict = field(default_factory=dict)
+    annotations: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -483,10 +484,13 @@ def select_text_for_turn(mapping: dict, anchor: TurnAnchor) -> TurnTextResult:
         if end_turn_text:
             # Newest by create_time.
             best = max(end_turn_text, key=lambda pair: _node_create_time(pair[1]))
+            from .citations import annotations_for_node
+
             return TurnTextResult(
                 "matched", text=_node_text(best[1]),
                 diagnostic={"user_node": user_nid, "assistant_node": best[0],
                             "reason": "terminal_text_end_turn"},
+                annotations=annotations_for_node(best[1], _node_text(best[1])),
             )
         # Text candidates exist but none end_turn yet.
         return TurnTextResult("not_ready", diagnostic={

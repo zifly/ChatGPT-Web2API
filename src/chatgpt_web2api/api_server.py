@@ -12,8 +12,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
+from contextlib import asynccontextmanager, suppress
 
 from aiohttp import web
 
@@ -22,6 +24,7 @@ from .cdp_driver import (
     AuthExpiredError,
     CDPDriver,
     GenerationStuckError,
+    NavigationError,
     RateLimitError,
     is_rate_limited_text,
 )
@@ -29,6 +32,7 @@ from .config import Config
 from .cross_process_lock import LockAcquisitionError
 from .image_input import ImageInputError, normalize_messages
 from .lock_resolver import MutationLock, OwnedTabRequiredError, resolve_mutation_lock
+from .request_guard import CURRENT_REQUEST, BrowserGuard, BrowserPausedError, RequestState, phase
 from .resilience import retry_on_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -70,6 +74,8 @@ class APIServer:
         # identical to a freshly-started healthy one — both report "waiting".
         self._started_at = time.time()
         self._last_error: str | None = None
+        self._last_error_at: float | None = None
+        self._browser_guard = BrowserGuard()
         self._last_successful_send_at: float | None = None
         # Non-rate-limit breaker registry (Phase 4). Injected by Service so the
         # REST process shares one registry across Chrome + driver + server.
@@ -82,6 +88,7 @@ class APIServer:
         self.app = web.Application(client_max_size=10 * 1024 * 1024)
         self.app.router.add_post("/v1/chat/completions", self._handle_chat)
         self.app.router.add_post("/chat/completions", self._handle_chat)
+        self.app.router.add_post("/v1/browser/recover", self._handle_browser_recover)
         self.app.router.add_get("/v1/models", self._handle_models)
         self.app.router.add_get("/v1/projects", self._handle_projects)
         self.app.router.add_get("/health", self._handle_health)
@@ -172,6 +179,10 @@ class APIServer:
 
         # Current-state summary, distinct from the historical/latching last_error.
         open_kinds = [k.value for k in BreakerKind if self._breakers.is_open(k)]
+        if status in ('starting', 'healthy') and (
+            self._browser_guard.paused or self._browser_guard.consecutive_timeouts
+        ):
+            status = 'degraded'
 
         return web.json_response(
             {
@@ -183,6 +194,10 @@ class APIServer:
                 "started_at": self._started_at,
                 "last_successful_send_at": self._last_successful_send_at,
                 "last_error": self._last_error,
+                "last_error_at": self._last_error_at,
+                "browser_paused": self._browser_guard.paused,
+                "browser_pause_reason": self._browser_guard.reason,
+                "consecutive_cdp_timeouts": self._browser_guard.consecutive_timeouts,
                 "open_breakers": open_kinds,
                 "breakers": self._breakers.snapshot(),
             }
@@ -191,6 +206,8 @@ class APIServer:
     async def _handle_models(self, request: web.Request) -> web.Response:
         if err := self._check_auth(request):
             return err
+        if self._browser_guard.paused:
+            return self._error_response(BrowserPausedError('Browser operations paused'))
         try:
             raw = await self._driver.get_models()
         except Exception:
@@ -224,6 +241,8 @@ class APIServer:
     async def _handle_projects(self, request: web.Request) -> web.Response:
         if err := self._check_auth(request):
             return err
+        if self._browser_guard.paused:
+            return self._error_response(BrowserPausedError('Browser operations paused'))
         try:
             projects = await self._driver.get_projects()
         except Exception as e:
@@ -232,6 +251,122 @@ class APIServer:
         return web.json_response({"object": "list", "data": projects})
 
     async def _handle_chat(self, request: web.Request) -> web.Response:
+        state = RequestState(asyncio.get_running_loop().time() + self._config.server.request_timeout,
+                             self._browser_guard)
+        token = CURRENT_REQUEST.set(state)
+        task = asyncio.current_task()
+        transport = getattr(request, 'transport', None)
+
+        async def watch_disconnect():
+            while True:
+                await asyncio.sleep(0.1)
+                if transport.is_closing():
+                    state.disconnected = True
+                    task.cancel()
+                    return
+
+        watcher = asyncio.create_task(watch_disconnect()) if isinstance(transport, asyncio.BaseTransport) else None
+        try:
+            async with asyncio.timeout_at(state.deadline):
+                response = await self._handle_chat_impl(request)
+            if response.status < 400 and not state.failed:
+                state.terminal_reason = 'succeeded'
+                self._last_error = None
+                self._last_error_at = None
+            if isinstance(response, web.Response) and response.content_type == 'application/json':
+                body = json.loads(response.body)
+                body['request_diagnostics'] = state.diagnostics(
+                    succeeded=response.status < 400 and not state.failed)
+                response.body = json.dumps(body).encode()
+            return response
+        except TimeoutError as exc:
+            state.deadline_expired = True
+            self._record_request_failure(exc)
+            return await self._guard_failure_response(exc)
+        except asyncio.CancelledError as exc:
+            state.terminal_reason = 'cancelled'
+            self._record_request_failure(exc)
+            if state.disconnected:
+                return self._error_response(TimeoutError('Client disconnected; request stopped'))
+            raise
+        finally:
+            logger.info('Request terminal: %s', json.dumps(state.diagnostics()))
+            if watcher:
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
+            CURRENT_REQUEST.reset(token)
+
+    def _record_request_failure(self, exc):
+        state = CURRENT_REQUEST.get()
+        if state and not state.failed:
+            state.failed = True
+            # Applied while holding the mutation lock, before queued callers
+            # can begin another navigation on a possibly unresolved browser.
+            if state.send_state == 'unknown':
+                state.guard.pause('send_outcome_unknown')
+            elif state.phase not in ('validation', 'queue') and (
+                isinstance(exc, asyncio.CancelledError) or state.remaining() <= 0
+            ):
+                state.guard.pause('request_interrupted')
+        self._last_error = f'{type(exc).__name__}: {exc}'
+        self._last_error_at = time.time()
+
+    @asynccontextmanager
+    async def _request_lock(self, port, key):
+        phase('queue')
+        async with MutationLock(port, key):
+            try:
+                yield
+            except BaseException as exc:
+                self._record_request_failure(exc)
+                raise
+
+    async def _handle_browser_recover(self, request):
+        err = self._check_auth(request)
+        if err is not None:
+            return err
+        acquired = False
+        try:
+            async with asyncio.timeout(5):
+                port, key = resolve_mutation_lock(self._driver, self._parallel_tabs)
+                async with MutationLock(port, key):
+                    acquired = True
+                    result = await self._driver._js_strict("'w2a-responsive'", timeout=3)
+                    if result != 'w2a-responsive':
+                        raise BrowserPausedError('Browser probe did not return the expected result')
+                    self._browser_guard.recover()
+            return web.json_response({'status': 'ready', 'prompt_sent': False,
+                                      'note': 'Read-only probe passed; no previous request was replayed'})
+        except Exception:
+            if not acquired:
+                return web.json_response({'error': {'code': 'browser_busy',
+                    'message': 'Recovery could not acquire the browser lock; active work was not interrupted',
+                    'prompt_sent': False}}, status=503)
+            self._browser_guard.pause('recovery_probe_failed')
+            return web.json_response({'error': {'code': 'browser_unresponsive',
+                'message': 'Read-only probe failed; inspect the browser before trying again',
+                'prompt_sent': False}}, status=503)
+
+    async def _guard_failure_response(self, exc):
+        response = self._error_response(exc)
+        state = CURRENT_REQUEST.get()
+        if not state or state.sse_response is None:
+            return response
+        # HTTP headers are already sent. Emit a structured error event, never
+        # a second HTTP response or a successful stop chunk.
+        resp = state.sse_response
+        try:
+            async with asyncio.timeout(1):
+                await self._send_sse(resp, {**json.loads(response.body), 'choices': [
+                    {'index': 0, 'delta': {}, 'finish_reason': 'error'}]})
+                await resp.write(b'data: [DONE]\n\n')
+                await resp.write_eof()
+        except (Exception, asyncio.CancelledError):
+            pass  # Client may already have closed its socket.
+        return resp
+
+    async def _handle_chat_impl(self, request: web.Request) -> web.Response:
         if err := self._check_auth(request):
             return err
 
@@ -259,6 +394,7 @@ class APIServer:
 
         model = body.get("model", self._config.chatgpt.default_model)
         stream = body.get("stream", False)
+        CURRENT_REQUEST.get().allow_preparation_recovery = not bool(stream) and bool(body.get('conversation_id'))
         project_id = (
             body.get("project_id")
             or body.get("gizmo_id")
@@ -341,6 +477,7 @@ class APIServer:
         # Serialize — cross-process lock so MCP + REST don't corrupt each other
         try:
             # Circuit-open fail-fast (Phase 4 PR2): refuse before touching Chrome
+            self._browser_guard.check()
             # if a breaker is open. Placed inside the try so it flows through
             # the except below → _error_response + _last_error, consistent with
             # every other failure path. Checked before acquiring the lock so a
@@ -360,7 +497,10 @@ class APIServer:
                 _port, _key = resolve_mutation_lock(self._driver, True)
             else:
                 _port, _key = self._cdp_port, None
-            async with MutationLock(_port, _key):
+            async with self._request_lock(_port, _key):
+                self._browser_guard.check()
+                phase('prepare')
+                CURRENT_REQUEST.get().preparation_attempt_count = 1
                 # Drift guard (parallel mode only): if the owned target changed
                 # while we waited for the lock, the key we hold no longer names
                 # the active tab. Fail retryably instead of mutating under a
@@ -379,6 +519,7 @@ class APIServer:
 
                 # Select model if specified (non-fatal on failure)
                 if model_slug and model_slug != "auto":
+                    phase('model_selection')
                     selected = await self._driver.select_model(model_slug)
                     if not selected:
                         logger.warning(
@@ -387,6 +528,7 @@ class APIServer:
                         )
 
                 # Decide: continue existing conversation or start fresh?
+                phase('navigation')
                 if conversation_id:
                     # Explicit conversation_id from client — navigate to it
                     await self._driver.navigate_conversation(conversation_id)
@@ -410,6 +552,8 @@ class APIServer:
                     await self._driver.navigate_new_chat(gizmo_id=project_id)
                     self._last_project_id = project_id
 
+                phase('prepare')
+                timeout = min(timeout, CURRENT_REQUEST.get().remaining())
                 if stream:
                     return await self._stream_response(request, model_slug, full_text, timeout, **({"images": images} if images else {}))
                 else:
@@ -417,7 +561,7 @@ class APIServer:
 
         except Exception as e:
             logger.error("Chat error: %s", e, exc_info=True)
-            self._last_error = f"{type(e).__name__}: {e}"
+            self._record_request_failure(e)
             return self._error_response(e)
 
     async def _check_circuit_or_recover(self) -> None:
@@ -445,12 +589,30 @@ class APIServer:
     # ── Error mapping ─────────────────────────────────────────
 
     def _error_response(self, exc: Exception) -> web.Response:
+        state = CURRENT_REQUEST.get()
+        if isinstance(exc, (TimeoutError, BrowserPausedError)):
+            code = 'browser_unresponsive' if isinstance(exc, BrowserPausedError) else 'browser_timeout'
+            if state and state.disconnected:
+                code = 'client_disconnected'
+            elif state and state.remaining() <= 0:
+                code = 'request_timeout'
+            response = web.json_response({'error': {'code': code, 'type': 'server_error',
+                'message': str(exc) or 'Request deadline exceeded'}},
+                status=503 if isinstance(exc, BrowserPausedError) else 504)
+        else:
+            response = self._error_response_base(exc)
+        if state:
+            body = json.loads(response.body)
+            body['error'].update(state.fields())
+            body['request_diagnostics'] = state.diagnostics()
+            response.body = json.dumps(body).encode()
+        return response
+
+    def _error_response_base(self, exc: Exception) -> web.Response:
         """Map a driver exception to an OpenAI-shaped error response.
 
-        - RateLimitError → HTTP 429 with the canonical OpenAI
-          ``rate_limit_exceeded`` type/code and a ``Retry-After`` header, so any
-          OpenAI-aware agent framework (SDK, LangChain, LlamaIndex) automatically
-          backs off and retries with zero client integration.
+        - RateLimitError → HTTP 429 with ``rate_limit_exceeded`` and a
+          ``Retry-After`` cooldown. Clients must disable automatic replay.
         - AuthExpiredError → HTTP 401 ``invalid_api_key`` — the ChatGPT session
           expired; previously this surfaced as silent empty data or a generic
           timeout.
@@ -463,6 +625,12 @@ class APIServer:
         from .image_input import ImageUploadTimeout
         from .turn_anchor import TurnReconciliationError
 
+        if isinstance(exc, NavigationError):
+            return web.json_response(
+                {'error': {'message': str(exc), 'type': 'server_error',
+                           'code': exc.code, 'navigation': exc.diagnostic}},
+                status=504 if exc.code == 'navigation_timeout' else 502,
+            )
         if isinstance(exc, ImageUploadTimeout):
             return web.json_response(
                 {"error": {"message": str(exc), "type": "server_error",
@@ -476,7 +644,7 @@ class APIServer:
                 status=504,
             )
         if isinstance(exc, RateLimitError):
-            retry_after = str(int(exc.retry_after))
+            retry_after = str(max(0, math.ceil(exc.retry_after)))
             return web.json_response(
                 {
                     "error": {
@@ -563,27 +731,31 @@ class APIServer:
     ) -> web.Response:
         """Non-streaming: collect the driver's verified final reply, return one JSON.
 
-        The send is wrapped in ``retry_on_rate_limit`` so a transient
-        ChatGPT "Too many requests" pop-up is dismissed and retried
-        transparently — the client only sees it (as a 429) if the limit
-        persists across all retries.
+        The shared rate-limit wrapper propagates immediately in REST context;
+        it must never replay this input/upload/send factory.
         """
         # P1: resolve model-aware detector budgets from config.
         from .completion_detector import DetectorBudgets
 
         budgets = DetectorBudgets.from_config(self._config.chatgpt, model)
 
-        async def _send_and_collect() -> str:
+        async def _send_and_collect() -> tuple[str, list[dict]]:
             collected = ""
+            annotations = []
             async for chunk in self._driver.send_and_stream(
                 text, timeout=timeout, budgets=budgets, model=model,
                 **({"images": images} if images else {}),
             ):
                 collected += chunk.delta
-            return collected
+                if chunk.annotations:
+                    annotations.extend(chunk.annotations)
+            return collected, annotations
 
         # Do not replay uploads/sends after an image request hits a rate limit.
-        full_text = await _send_and_collect() if images else await retry_on_rate_limit(self._driver, _send_and_collect)
+        full_text, annotations = await _send_and_collect() if images else await retry_on_rate_limit(self._driver, _send_and_collect)
+        message = {"role": "assistant", "content": full_text}
+        if annotations:
+            message["annotations"] = annotations
 
         conv_id = self._driver._current_conv_id or ""
         self._last_conv_id = conv_id
@@ -599,7 +771,7 @@ class APIServer:
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": full_text},
+                        "message": message,
                         "finish_reason": "stop",
                     }
                 ],
@@ -665,6 +837,9 @@ class APIServer:
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         await resp.prepare(request)
+        state = CURRENT_REQUEST.get()
+        if state:
+            state.sse_response = resp
 
         cid = f"chatcmpl-{uuid.uuid4().hex[:29]}"
         created = int(time.time())
@@ -692,7 +867,10 @@ class APIServer:
                 text, timeout=timeout, budgets=budgets, model=model,
                 **({"images": images} if images else {}),
             ):
-                if chunk.delta:
+                if chunk.delta or chunk.annotations:
+                    delta = {"content": chunk.delta}
+                    if chunk.annotations:
+                        delta["annotations"] = chunk.annotations
                     await self._send_sse(
                         resp,
                         {
@@ -703,7 +881,7 @@ class APIServer:
                             "choices": [
                                 {
                                     "index": 0,
-                                    "delta": {"content": chunk.delta},
+                                    "delta": delta,
                                     "finish_reason": None,
                                 }
                             ],
@@ -722,12 +900,21 @@ class APIServer:
                             "created": created,
                             "model": model,
                             "conversation_id": conv_id,
+                            **({'request_diagnostics': CURRENT_REQUEST.get().diagnostics(
+                                succeeded=chunk.finish_reason == 'stop')}
+                               if CURRENT_REQUEST.get() else {}),
                             "choices": [
                                 {"index": 0, "delta": {}, "finish_reason": chunk.finish_reason}
                             ],
                         },
                     )
+        except (TimeoutError, BrowserPausedError) as e:
+            self._record_request_failure(e)
+            return await self._guard_failure_response(e)
         except RateLimitError as e:
+            if CURRENT_REQUEST.get():
+                self._record_request_failure(e)
+                return await self._guard_failure_response(e)
             # Mid-stream throttle (rare after pre-flight). Status is locked at
             # 200, so we can't upgrade to 429; surface as an inline error chunk
             # with a recognizable marker so clients can detect it.
@@ -750,7 +937,10 @@ class APIServer:
                     ],
                 },
             )
-        except AuthExpiredError:
+        except AuthExpiredError as e:
+            if CURRENT_REQUEST.get():
+                self._record_request_failure(e)
+                return await self._guard_failure_response(e)
             # Session expired mid-stream (status locked at 200). Surface with a
             # recognizable marker so clients can prompt re-login.
             logger.warning("Mid-stream auth expiry")
@@ -771,6 +961,9 @@ class APIServer:
                 },
             )
         except GenerationStuckError as e:
+            if CURRENT_REQUEST.get():
+                self._record_request_failure(e)
+                return await self._guard_failure_response(e)
             # Generation stalled mid-stream (status locked at 200). Surface the
             # phase + duration so the client can decide whether to retry.
             logger.warning("Mid-stream generation stuck: %s", e)
@@ -794,6 +987,9 @@ class APIServer:
             )
         except Exception as e:
             logger.error("Stream error: %s", e)
+            if CURRENT_REQUEST.get():
+                self._record_request_failure(e)
+                return await self._guard_failure_response(e)
             await self._send_sse(
                 resp,
                 {
