@@ -7,7 +7,7 @@ Publication changes: configurable proxy/bind address, fixed base image name, loo
 
 Publishing into the user's fork should apply reviewed changes on top of upstream history; do not force-replace the fork history or upload the NAS folder wholesale. Removing upstream automation/capture files should be an explicit part of the publication diff.
 
-No new attachment support, extra account allowances or fully validated parallel-client behavior is claimed. Unit tests cannot replace a live deployment check.
+The initial publication did not add attachment support or validate parallel clients. Later image, concurrency and replacement-retry updates are recorded below. No extra account allowances are claimed; unit tests cannot replace a live deployment check.
 
 Publication review v2 excludes historical capture/experiment scripts, protocol notes and upstream marketing images/docs outside the NAS/API documentation scope. Conversation fixture identifiers and timestamps are synthetic; structure and text semantics are retained. These omissions must be explicit when applying changes to an upstream fork.
 
@@ -87,3 +87,11 @@ The rebuilt NAS deployment passed four live synthetic requests: parallel new tex
 Gateways may abandon a failed attempt and automatically retry once in a new conversation, even after an uncertain or confirmed submission. JSON/SSE errors advertise `new_conversation_retry` with an allowed flag, one-retry budget and cooldown; the legacy flag still forbids ordinary request replay. Gateways enforce the task-wide budget, rebuild context/images and atomically reject old-attempt events. The driver still sends at most once per request; shared cooldown and worker quarantine remain in effect. The related suite passed 235 tests, including 14 new replacement-policy cases. See [gateway requirements](NEW-CONVERSATION-RETRY.md).
 
 The NAS builder does not support a build-time `host-gateway` mapping. Removed that optional build mapping and documented using a reachable LAN address for build proxies; runtime host mapping is unchanged.
+
+The replacement-policy application update was deployed while retaining the existing browser/system dependencies. Live HTTP 400/401 checks confirmed replacement retries were disabled for invalid/unauthorized requests. Health showed two connected, idle workers with no pauses. These deployment checks sent no chat messages; gateway budget persistence, stale-event filtering and frontend ID replacement still require caller-side acceptance. The four live chats above belong to the earlier concurrency validation.
+
+## 2026-09-25 Documentation alignment / 调用说明统一
+
+README、双语接入手册和 API 参考统一使用新会话替换重试约定。删除旧的“5xx 不可重试”和“REST/SDK 自动原样重发 429”说明，补充 SSE 顶层错误、冷却、任务级一次预算，以及前端保存新 ID、过滤旧事件的要求。放弃表示不再采用旧结果，不代表删除聊天记录或已停止旧生成。
+
+Documentation examples use placeholder addresses, synthetic messages and generic conversation IDs. Private configuration, credentials, browser state, logs and deployment backups remain excluded from Git and Docker build contexts.

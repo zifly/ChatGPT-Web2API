@@ -18,7 +18,7 @@
 | 模型 | `auto` |
 | API Key | 从 NAS 项目的 `data/api.env` 中读取 `W2A_API_KEYS` 的值 |
 | 请求头 | `Authorization: Bearer <API Key>` |
-| 初次接入 | `stream: false`，并发 1，关闭自动重试 |
+| 初次接入 | `stream: false`，并发 1，关闭普通 HTTP/SDK 原样重试；网关按上述约定实现新会话重试 |
 | 建议客户端超时 | 180 秒；这是客户端设置，不会修改服务端超时 |
 
 REST 现将排队、导航、上传和读取回复纳入同一服务端截止时间（默认 120 秒）。三态发送结果、浏览器暂停状态和带密钥的只读恢复接口，见[请求超时与浏览器恢复](docs/REQUEST-RECOVERY.md)。
@@ -305,7 +305,7 @@ Endpoint：POST /chat/completions（相对于上述 Base URL）
 
 要求：
 1. 使用 Chat Completions，不使用 Responses API。
-2. 首次设置 stream=false、并发1、客户端超时180秒，关闭自动重试。
+2. 首次设置 stream=false、并发1、客户端超时180秒，关闭普通 HTTP/SDK 原样重试。网关的新会话重试按[完整约定](docs/NEW-CONVERSATION-RETRY.md)实现。
 3. 每个独立任务设置 new_conversation=true、不传 conversation_id，避免沿用共享的上次会话。
 4. 输入先只传字符串文本；需要图片时遵循 Base64 image_url 约定，不假定原文档附件、tools 或 response_format 生效。
 5. 从 choices[0].message.content 读取回复；空内容按失败处理。
@@ -334,5 +334,7 @@ Endpoint：POST /chat/completions（相对于上述 Base URL）
 ## 10. 本手册的验证范围
 
 接口字段、会话分支和错误码已对照源码。此前回复完整性与协议模式通过 146 项相关离线回归和本机合成 JSON 测试；此前图片、会话控制与启动检查通过 145 项相关测试；2026-09-25 的 REST 并发与图片兼容更新通过 221 项相关离线测试，接入要求见[并发迁移说明](docs/REST-CONCURRENCY.md)。NAS 实测使用合成图片与虚构编号，覆盖新建、识图、SSE 追问和切回旧会话，详见[图片验证记录](docs/IMAGE-INPUT.md)。
+
+后续新会话重试提示更新通过 235 项相关离线测试，其中新增 14 项重试用例。部署后已实际检查 HTTP 400/401 的策略字段及两路健康状态，该组检查未发送聊天。网关预算持久化、迟到事件过滤和前端新 ID 回填仍需调用项目验收，见[重试验证范围](docs/NEW-CONVERSATION-RETRY.md#4-验收)。
 
 长文本、复杂图片、高并发和长期稳定性尚未全面验收，业务语义仍需调用方审查。示例需在自己的网络和依赖环境中验证；SDK 示例未单独执行。公开文档不包含下游项目的实际任务或数据。

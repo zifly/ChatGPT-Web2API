@@ -50,9 +50,9 @@ POST /v1/chat/completions
 **Response (streaming):**
 
 ```
-data: {"id":"conv-abc123","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
+data: {"id":"chatcmpl-response-id","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
 
-data: {"id":"conv-abc123","object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chatcmpl-response-id","object":"chat.completion.chunk","conversation_id":"actual-web-conversation-id","choices":[{"delta":{},"finish_reason":"stop"}]}
 
 data: [DONE]
 ```
@@ -122,56 +122,93 @@ Use `list_models` for the current live catalog.
 
 ## Error Handling
 
-All errors return standard OpenAI-compatible JSON. Two error shapes exist:
+REST chat failures return an OpenAI-shaped top-level `error`, including a
+`new_conversation_retry` policy. Ordinary HTTP/SDK replay must stay disabled
+(`max_retries=0`). A gateway may instead abandon the old attempt and retry once
+in a new conversation under the [replacement contract](NEW-CONVERSATION-RETRY.md).
+The gateway owns the task-wide retry budget and must rebuild context/images,
+discard late old-attempt events and save the successful replacement's new ID.
 
-### Server errors (HTTP 500)
+### Error classification
 
-Driver/processing failures — Chrome disconnects, timeouts, navigation or login
-problems. These are real failures, **not** retriable:
+| Response | Replacement policy |
+|---|---|
+| HTTP 5xx | Allowed once after the advertised delay, even if `send_state` is `unknown` or `confirmed`; explicit `client_disconnected` is excluded |
+| HTTP 429 | Allowed once after the advertised account cooldown; new conversations do not bypass it |
+| Other HTTP 4xx, including 400/401 | Not allowed; correct input, credentials or login first |
+| Network timeout without an error body | The gateway may apply the same explicit, bounded policy; user cancellation must not trigger it |
+
+The REST driver does not replay a failed send inside the same request, including
+rate-limit failures. Non-REST/MCP retry behavior is outside this contract.
+
+### Server errors (HTTP 5xx)
+
+For example, a request deadline can return HTTP 504 with the following fields
+(additional diagnostics omitted):
 
 ```json
-HTTP/1.1 500
 {
   "error": {
-    "message": "<details>",
-    "type": "server_error"
+    "message": "Request deadline exceeded",
+    "type": "server_error",
+    "code": "request_timeout",
+    "send_state": "unknown",
+    "automatic_retry_allowed": false,
+    "new_conversation_retry": {
+      "allowed": true,
+      "mode": "new_conversation",
+      "max_retries": 1,
+      "retry_after_seconds": 2
+    }
   }
 }
 ```
 
-### Rate limits (HTTP 429) — retriable
+`automatic_retry_allowed=false` forbids ordinary replay; it does not disable
+the separate replacement policy. `max_retries` is a policy hint, not a persisted
+counter: the gateway must stop after its one replacement, even if another error
+again advertises `allowed=true`. Disallowed policies return `max_retries=0`.
 
-ChatGPT's "Too many requests" throttling. The server first tries to recover
-**transparently**: it dismisses the pop-up and retries your request up to 3
-times with backoff. Only if the limit *persists* does it surface this
-standard OpenAI `429`, which the OpenAI SDK / LangChain / LlamaIndex auto-retry:
+### Rate limits (HTTP 429)
 
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 60
+HTTP 429 carries `Retry-After` and a structured error. For a 60-second cooldown,
+the response includes these fields:
+
+```json
 {
   "error": {
     "message": "ChatGPT rate limit reached (Too many requests). Retry in 60s.",
     "type": "rate_limit_exceeded",
     "param": null,
-    "code": "rate_limit_exceeded"
+    "code": "rate_limit_exceeded",
+    "automatic_retry_allowed": false,
+    "new_conversation_retry": {
+      "allowed": true,
+      "mode": "new_conversation",
+      "max_retries": 1,
+      "retry_after_seconds": 60
+    }
   }
 }
 ```
 
-`Retry-After` is parsed from the pop-up text when ChatGPT gives an exact
-number; otherwise it defaults to a conservative 60s.
+Wait at least the advertised cooldown. It applies across the shared account;
+opening a new chat or probing browser recovery does not clear it.
 
 ### Streaming caveat
 
-A 429 can be returned before streaming begins (a pre-flight rate-limit check
-runs before the SSE response is committed). A rate limit that appears
-*mid-stream* — after the `200 OK` is sent — cannot change status, so it is
-surfaced as an inline SSE chunk:
+Before SSE begins, failures can return an ordinary HTTP error. After HTTP 200
+headers are committed, failures use a top-level `error` event and
+`finish_reason=error`. For example (additional diagnostics omitted):
 
 ```
-data: {"choices":[{"delta":{"content":"\n\n[Error: rate_limit_exceeded — retry in 60s]"},"finish_reason":"error"}]}
+data: {"error":{"code":"rate_limit_exceeded","automatic_retry_allowed":false,"new_conversation_retry":{"allowed":true,"mode":"new_conversation","max_retries":1,"retry_after_seconds":60}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}
+
 data: [DONE]
 ```
 
-Prefer **non-streaming** requests if your agent needs reliable 429 detection.
+Read cooldown from the policy in the event; HTTP 200 and `[DONE]` alone do not
+mean success. Only accept a complete successful stream with `stop` and `[DONE]`,
+and keep the final `conversation_id` separate from the response `id`. During a
+replacement, discard all old-attempt output and ID updates. See the
+[gateway and frontend acceptance checklist](NEW-CONVERSATION-RETRY.md#4-验收).

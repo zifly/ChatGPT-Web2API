@@ -21,7 +21,7 @@
 - `detail` 只能省略或设为 `auto`；具体图像处理由网页决定。
 - 纯图片请求会自动附加英文提示“Describe the attached image(s).”；建议始终明确写出问题。
 
-先使用非流式、并发 1、客户端超时 180 秒并关闭自动重试。服务最多等待上传确认 90 秒，再用剩余请求预算等待回答。上传失败不会发送问题，非流式图片请求不会通过限流重试器自动重发。底层其他机制不构成端到端“最多发送一次”的保证。
+先使用非流式、并发 1、客户端超时 180 秒并关闭普通 HTTP/SDK 原样重试。服务最多等待上传确认 90 秒，再用剩余请求预算等待回答。上传失败不会发送问题，非流式图片请求不会通过限流重试器自动重发。网关的新会话重试按下述约定单独实现；这可能造成重复生成，不构成端到端“最多执行一次”的保证。
 
 新版非流式接口将上传等待超时标记为 HTTP 504、`error.code=image_upload_timeout`、`error.prompt_sent=false`。`reply_timeout` 表示等待完整回复超时；以 `send_state` 和 `prompt_sent` 判断提交状态。网关可以放弃旧尝试，在新会话重试一次，但必须重新附上必要图片和上下文、丢弃旧结果；详见[重试约定](NEW-CONVERSATION-RETRY.md)。单次只读 CDP 超时仍只在原有总时限内重试读取，不重复点击发送。
 
@@ -82,7 +82,7 @@ Supported MIME types: `image/png`, `image/jpeg`, `image/webp`. Maximum 4 images,
 
 Text and image requests can explicitly start a fresh chat with `new_conversation: true`. To continue, omit that flag and provide `conversation_id`. Conflicting controls return HTTP 400.
 
-Use the Python example above with your own base URL, service key and local image. Match the MIME to the file. Start with `stream: false`, concurrency 1, a 180-second client timeout and no automatic client retries. Upload confirmation is bounded to 90 seconds; the remaining server request budget is used for the answer. Both streaming and non-streaming return text after final verification; SSE is buffered, not token-by-token.
+Use the Python example above with your own base URL, service key and local image. Match the MIME to the file. Start with `stream: false`, concurrency 1, a 180-second client timeout and ordinary HTTP/SDK replay disabled. A gateway may separately implement one [new-conversation replacement](NEW-CONVERSATION-RETRY.md), rebuilding the required images and context. Upload confirmation is bounded to 90 seconds; the remaining server request budget is used for the answer. Both streaming and non-streaming return text after final verification; SSE is buffered, not token-by-token.
 
 Malformed images fail before browser mutation. Unconfirmed uploads prevent sending the prompt. Non-streaming image requests bypass the automatic rate-limit resend wrapper, but this is not an end-to-end exactly-once guarantee for every underlying mechanism. Temporary local files are removed, and unsent composer attachments are cleaned up where possible. Files already uploaded to ChatGPT follow the website's retention behavior; local cleanup does not delete remote files.
 

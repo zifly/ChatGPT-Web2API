@@ -18,7 +18,7 @@ Updated: 2026-09-25. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` ar
 | Model | `auto` |
 | API key | A key from `W2A_API_KEYS` in the NAS project's `data/api.env` |
 | Header | `Authorization: Bearer <API key>` |
-| Initial settings | `stream: false`, concurrency 1, automatic client retries disabled |
+| Initial settings | `stream: false`, concurrency 1, ordinary HTTP/SDK replay disabled; gateway replacement retries follow the contract above |
 | Client timeout | 180 seconds; this does not change the server timeout |
 
 REST now applies one server deadline (default 120 seconds) across queueing, navigation, uploads and replies. For tri-state submission errors, paused-browser health and the authenticated recovery endpoint, see [request deadlines and browser recovery](docs/REQUEST-RECOVERY.md).
@@ -302,7 +302,7 @@ Model: auto
 Authorization: Bearer key from NAS_CHATGPT_API_KEY
 
 1. Use Chat Completions, not Responses API.
-2. Start with stream=false, concurrency 1, timeout 180 seconds, and no automatic client retries.
+2. Start with stream=false, concurrency 1, timeout 180 seconds, and ordinary HTTP/SDK replay disabled. Implement gateway replacement retries only under the [retry contract](docs/NEW-CONVERSATION-RETRY.md).
 3. Set new_conversation=true and omit conversation_id for every independent task.
 4. Start with string text. For images, follow the documented Base64 image_url contract; do not assume document attachments, tools or response_format are supported.
 5. Read choices[0].message.content; empty output is failure.
@@ -331,5 +331,7 @@ Both modes buffer SSE content until final verification. Clients and reverse prox
 ## 10. Validation scope
 
 API fields, conversation branches and errors were checked against source. The earlier reply fix/backend mode passed 146 related offline tests and an exact local synthetic JSON request. The earlier image, conversation-control and startup-check suite passed 145 related tests. The 2026-09-25 REST concurrency and image-compatibility update passed 221 related offline tests; see [client migration](docs/REST-CONCURRENCY.md). Synthetic NAS checks cover new chats, image input, SSE follow-up and switching back to a stored ID; see [image validation](docs/IMAGE-INPUT.md).
+
+The subsequent replacement-policy update passed 235 related offline tests, including 14 new retry cases. Deployed HTTP 400/401 policy and two-worker health checks passed without sending chat messages. Gateway budget persistence, late-event rejection and frontend ID replacement still require caller-side acceptance; see [retry validation](docs/NEW-CONVERSATION-RETRY.md#4-验收).
 
 Broad vision accuracy, long-context behavior, larger-scale concurrency and sustained stability remain unverified. Consumers must validate output semantics. Test examples in your own network and dependency environment; the SDK example was not separately executed. Public examples do not contain downstream application instances.

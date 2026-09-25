@@ -4,7 +4,7 @@
 
 允许网关在超时、短暂连接故障、HTTP 5xx 或限流冷却结束后，**放弃旧尝试，在全新会话自动重试一次**。包括原请求 `send_state=unknown` 或 `confirmed` 的情况。放弃表示不再接收旧结果、不再续用旧 ID；不要求先确认旧网页有没有生成完，也不删除账号中的聊天记录。
 
-旧网页请求可能仍会完成并消耗额度。这里保证的是业务只采用当前尝试的结果，不能保证模型只执行一次。重复生成可以接受时，按本约定重试即可。
+旧网页请求可能仍会完成并消耗额度。网关按本约定实现结果过滤后，业务只采用当前尝试的结果；web2api 的提示字段本身不会替调用方过滤旧结果，也不能保证模型只执行一次。重复生成可以接受时，按本约定重试即可。
 
 ## 1. 错误响应约定
 
@@ -27,10 +27,19 @@ JSON 错误和 SSE 顶层 `error` 均提供以下提示：
 
 - `automatic_retry_allowed=false` 保留兼容语义：普通 HTTP/SDK 不得原样重放请求，尤其不能继续向旧 ID 补发。
 - `new_conversation_retry.allowed=true` 明确允许网关执行本页的新会话替换重试。429、5xx 返回 true；参数、鉴权等其他 4xx 返回 false。明确的客户端取消不触发重试。
-- `max_retries=1` 是**整个业务任务**的自动重试上限，由网关持久化计数并执行；web2api 无法把多个独立 HTTP 请求自动归为同一个任务，不在内部再重试发送。
+- 允许时 `max_retries=1`，不允许时为 `0`。一次上限作用于**整个业务任务**，由网关持久化计数并执行；web2api 无法把多个独立 HTTP 请求自动归为同一个任务，不在内部再重试发送。第二次请求即使再次返回 `allowed=true`，也不能重置任务预算。
 - `retry_after_seconds` 通常为 2 秒；429 时至少等待 `Retry-After` 指定的时长。SSE 错误把等待时长放在该字段，因为 HTTP 头可能已经发出。
 
 如果网络超时/连接断开导致未收到完整错误体，网关仍可按本页策略新建重试一次；须区分网络故障与用户主动取消。旧版服务没有此提示字段时，可通过网关自己的显式策略启用本约定，不能让普通 SDK 猜测重试方式。400/401/403 先修复输入或登录，不自动换会话碰运气。
+
+| 情况 | 网关处理 |
+|---|---|
+| 5xx，且不是明确的客户端取消 | 按提示退避，预算尚未使用且能重建输入时，新建重试一次 |
+| 429 | 至少等待指定冷却，再使用同一份任务重试预算；换会话不能绕过账号限流 |
+| 网络故障，没有完整错误体 | 按网关显式策略执行同样的一次替换流程 |
+| 其他 4xx、用户取消、预算已用尽或缺少必要上下文 | 结束自动重试，返回错误或提示补充输入 |
+
+SSE 的 HTTP 200 和 `[DONE]` 都不能单独证明成功。先检查事件顶层 `error` 和 `finish_reason=error`；成功结果必须收到正常 `stop` 和完整结束标记。错误发生在响应头发出后时，冷却信息从 `error.new_conversation_retry.retry_after_seconds` 读取。
 
 ## 2. 网关按这个顺序处理
 
@@ -73,8 +82,12 @@ JSON 错误和 SSE 顶层 `error` 均提供以下提示：
 
 web2api 本次通过 235 项相关离线测试，其中新增 14 项覆盖重试提示、失败后的独立新请求、旧槽位隔离、图片输入重建以及 JSON/SSE 冷却提示。浏览器使用合成替身；网关的预算持久化、旧事件过滤和前端回填仍需调用项目按上面的清单验收。
 
+2026-09-25 已将重试提示更新部署到 NAS，本次仅更新应用代码，保留原有浏览器和系统依赖。部署后实际 HTTP 检查确认 400/401 返回禁止重试的策略；健康检查为两路已连接、空闲且未暂停。这组部署检查没有发送聊天请求，也未执行真实网关的超时替换重试。此前四条 NAS 合成聊天验证的是多会话并发，记录见[并发验收](REST-CONCURRENCY.md#7-本次-nas-部署与实测2026-09-25)。
+
 ## English
 
 A gateway may abandon a failed attempt and retry once in a **new conversation**, including when the old submission was confirmed or uncertain. Ignore all late results from the abandoned attempt. This accepts duplicate model execution; it does not promise exactly-once generation or cancel the old server-side work.
 
 Keep ordinary HTTP/SDK replay disabled. The additive `error.new_conversation_retry` policy permits one replacement after transient failures, with a cooldown included in JSON and SSE errors. The gateway enforces the total task budget, rebuilds context and attachments, removes the old ID and sends `new_conversation: true`. Use atomic attempt-version checks before accepting any result. Do not restart the shared service or interrupt unrelated conversations. Authentication/validation failures and explicit user cancellations are not automatic retries.
+
+A second failure must end automatic recovery even if its policy again advertises `allowed=true`. Read top-level SSE errors and `finish_reason=error`; HTTP 200 or `[DONE]` alone is not success. Store the replacement conversation ID only after accepting the current attempt's complete success. The deployed service passed HTTP 400/401 policy and two-worker health checks without sending chat messages; end-to-end gateway replacement acceptance remains outstanding.
