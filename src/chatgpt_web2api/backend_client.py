@@ -232,7 +232,12 @@ class BackendClient:
             return ""
         if not url or "/c/" not in url:
             return ""
-        return url.split("/c/")[1].split("/")[0].split("?")[0]
+        from urllib.parse import unquote, urlsplit
+
+        conv_id = unquote(urlsplit(url).path.split("/c/", 1)[1].split("/")[0])
+        # New chats first use WEB:<client UUID>, then navigate to a different
+        # server ID. The temporary ID cannot be queried via backend-api.
+        return "" if conv_id.upper().startswith("WEB:") else conv_id
 
     async def _get_live_conversation_id_best_effort(self) -> str:
         """Resolve the in-flight conversation id by cheapest available source.
@@ -250,7 +255,7 @@ class BackendClient:
         expensive fetch, and this helper is called every ~1s during polling.
         Returns ``""`` if no source has a usable id yet.
         """
-        if self._driver._current_conv_id:
+        if self._driver._current_conv_id and not self._driver._current_conv_id.upper().startswith("WEB:"):
             return self._driver._current_conv_id
         return await self._conversation_id_from_url()
 

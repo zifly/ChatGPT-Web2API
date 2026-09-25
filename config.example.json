@@ -18,6 +18,8 @@
   "mcp_account_throttle_cooldown_seconds": 300,
   "api_keys": [],
   "request_timeout": 120,
+  "rest_pool_size": 1,
+  "rest_pool_max_queue": 32,
   "log_level": "INFO",
   "ensure_degraded_poll_interval_s": 2.0,
   "ensure_degraded_poll_budget_s": 20.0,

@@ -64,11 +64,11 @@ def test_generic_runtime_error_maps_to_500():
     assert "Retry-After" not in resp.headers
 
 
-def test_timeout_error_maps_to_500():
+def test_timeout_error_maps_to_504():
     """TimeoutError is a server-side failure, not a rate limit."""
     server = _server()
     resp = server._error_response(TimeoutError("timed out"))
-    assert resp.status == 500
+    assert resp.status == 504
 
 
 def _body(resp: web.Response) -> dict:

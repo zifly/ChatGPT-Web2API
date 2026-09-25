@@ -16,6 +16,7 @@ read, start with the [routing table](#which-doc-should-i-read) below.
 | **run it always-on under systemd / launchd / NSSM** | [os-supervision.md](os-supervision.md) |
 | **diagnose an incident or interpret `/health`** | [runbook.md](runbook.md) |
 | **recover from a `circuit_open` / auth expiry** | [runbook.md](runbook.md) → §4 (circuit_open) + §6 (auth recovery) |
+| **adapt a frontend/backend for concurrent REST conversations** | [REST-CONCURRENCY.md](REST-CONCURRENCY.md) |
 | **call the REST or MCP API from code** | [api-reference.md](api-reference.md) |
 | **understand how the codebase is structured** | [architecture.md](architecture.md) |
 | **understand why we drive Chrome via CDP** | [adr-0001-automation-backend.md](adr-0001-automation-backend.md) |

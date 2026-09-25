@@ -27,7 +27,7 @@ from chatgpt_web2api.cdp_driver import CDPDriver
 
 def test_url_match_exact_conversation_path():
     d = CDPDriver(cdp_port=9222)
-    cid = "6a3a80c8-64bc-83eb-8967-66452f3d93b1"
+    cid = "00000000-0000-4000-8000-999999999999"
     assert d._is_url_at_conversation(
         f"https://chatgpt.com/c/{cid}", cid
     ) is True
@@ -195,7 +195,7 @@ async def test_navigate_conversation_sets_id_only_on_verified_landing():
     """Happy path: composer ready AND url matches → _current_conv_id set."""
     d = CDPDriver(cdp_port=9222)
     cid = "abc-123"
-    d._cdp = AsyncMock()  # Page.navigate
+    d._cdp = AsyncMock(return_value={"result": {}})  # Page.navigate
     # P2: navigate_conversation now uses _js_strict with a staged probe.
     # Return a ready state at the right URL on first poll.
     d._js_strict = AsyncMock(return_value=json.dumps({
@@ -203,6 +203,7 @@ async def test_navigate_conversation_sets_id_only_on_verified_landing():
         "ready_state": "complete",
         "app_shell": True,
         "composer": True,
+        "composer_usable": True,
     }))
     await d.navigate_conversation(cid)
     assert d._current_conv_id == cid
@@ -258,6 +259,7 @@ async def test_rest_auto_continue_invokes_ensure_current(monkeypatch):
     server._config = srv.Config.load(None)
     server._breakers = srv.BreakerRegistry()  # Phase 4 PR2: preflight reads this
     server._last_error = None
+    server._browser_guard = srv.BrowserGuard()
     driver = MagicMock()
     driver._current_conv_id = "conv-rest-1"
     driver._current_model = None
@@ -271,7 +273,7 @@ async def test_rest_auto_continue_invokes_ensure_current(monkeypatch):
     reached = {"past_guard": False}
     async def _stub_response(*a, **kw):
         reached["past_guard"] = True
-        return MagicMock()
+        return srv.web.Response()
     server._full_response = _stub_response
     server._stream_response = _stub_response
 
@@ -582,4 +584,3 @@ async def test_cdp_does_not_loop_if_reconnect_also_fails():
         await d._cdp("Runtime.evaluate")
 
     assert reconnect_calls["n"] == 1, "must reconnect at most ONCE, never loop"
-

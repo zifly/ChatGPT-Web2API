@@ -6,6 +6,12 @@ ChatGPT-Web2API exposes two interfaces: an OpenAI-compatible REST API and an MCP
 
 Base URL: `http://localhost:8080/v1`
 
+For this NAS fork, see the [calling guide](../API-USAGE.md) and
+[concurrent conversation migration](REST-CONCURRENCY.md). Pooled REST can run
+distinct conversations concurrently while serializing each ID within one REST
+process. Check `/health.rest_pool` for the deployed capacity. Missing IDs always
+start fresh in pool mode; singleton mode retains legacy implicit selection.
+
 ### Chat Completions
 
 ```
@@ -19,6 +25,8 @@ POST /v1/chat/completions
 | `model` | string | yes | Model slug (see `/v1/models`). Use `"auto"` for default. |
 | `messages` | array | yes | Array of `{"role": "user"/"assistant", "content": "..."}` |
 | `stream` | boolean | no | Enable SSE streaming (default: `false`) |
+| `new_conversation` | boolean | no | Force a fresh chat; cannot be true with a nonempty conversation ID |
+| `conversation_id` | string | no | Resume the saved webpage ID; send only new turn content |
 | `temperature` | float | no | Ignored — ChatGPT controls this |
 | `max_tokens` | int | no | Ignored — ChatGPT controls this |
 
@@ -26,7 +34,8 @@ POST /v1/chat/completions
 
 ```json
 {
-  "id": "conv-abc123",
+  "id": "chatcmpl-response-id",
+  "conversation_id": "actual-web-conversation-id",
   "object": "chat.completion",
   "model": "auto",
   "choices": [{

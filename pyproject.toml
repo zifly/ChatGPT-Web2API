@@ -25,6 +25,7 @@ classifiers = [
 ]
 keywords = ["chatgpt", "openai", "mcp", "cdp", "proxy", "api"]
 dependencies = [
+    "Pillow>=10.0",
     "websockets>=12.0",
     "aiohttp>=3.9",
     # 1.26+: ServerSession.send_progress_notification is the real impl (the

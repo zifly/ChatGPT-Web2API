@@ -1,0 +1,35 @@
+services:
+  chatgpt-web2api:
+    image: ${W2A_IMAGE:?Set W2A_IMAGE to a trusted desktop image}
+    container_name: chatgpt-web2api
+    env_file:
+      - ./data/api.env
+    ports:
+      - "${W2A_BIND_ADDRESS-127.0.0.1}:11111:8080"
+      - "${W2A_BIND_ADDRESS-127.0.0.1}:6080:6080"
+    volumes:
+      - ./data/chrome-profile:/data/chrome-profile
+      - ./data/cookies:/data/cookies:ro
+      - ./data/vnc-password.txt:/run/secrets/vnc-password:ro
+    environment:
+      - W2A_HEADLESS=false
+      - W2A_PORT=8080
+      - W2A_HOST=0.0.0.0
+      - W2A_TAB_MODE=owned
+      - W2A_PARALLEL_TABS=true
+      - W2A_REST_POOL_SIZE=${W2A_REST_POOL_SIZE:-2}
+      - W2A_REST_POOL_MAX_QUEUE=${W2A_REST_POOL_MAX_QUEUE:-32}
+      - W2A_REPLY_SOURCE=${W2A_REPLY_SOURCE:-reconciled}
+      - DISPLAY=:99
+      - PYTHONUNBUFFERED=1
+      - HTTP_PROXY=${W2A_PROXY_URL:-}
+      - HTTPS_PROXY=${W2A_PROXY_URL:-}
+      - http_proxy=${W2A_PROXY_URL:-}
+      - https_proxy=${W2A_PROXY_URL:-}
+      - W2A_CHROME_PROXY=${W2A_PROXY_URL:-}
+      - NO_PROXY=localhost,127.0.0.1,::1
+      - no_proxy=localhost,127.0.0.1,::1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stop_grace_period: 30s
+    restart: unless-stopped

@@ -10,11 +10,13 @@ if [ -f "$COOKIE_FILE" ]; then
     # Start proxy in background (Chrome will launch)
     chatgpt-web2api "$@" &
     PROXY_PID=$!
+    # Forward Docker stop to the service so it can close Chrome and release locks.
+    trap 'kill -TERM "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" || true; exit 0' TERM INT
     
     # Wait for Chrome CDP to be ready
     echo "Waiting for Chrome CDP..."
     for i in $(seq 1 30); do
-        if curl -s http://127.0.0.1:9222/json/version > /dev/null 2>&1; then
+        if curl --noproxy '*' --max-time 1 -fsS http://127.0.0.1:9222/json/version > /dev/null 2>&1; then
             break
         fi
         sleep 1

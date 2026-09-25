@@ -62,6 +62,7 @@ class Service:
 
         # 2. CDP driver (with login detection)
         logger.info("Connecting CDP driver...")
+        driver_breakers = BreakerRegistry() if cfg.server.rest_pool_size > 1 else self._breakers
         self._driver = CDPDriver(
             cdp_port=cfg.chrome.cdp_port,
             tab_mode=cfg.chatgpt.tab_mode,
@@ -69,7 +70,7 @@ class Service:
                 cdp_port=cfg.chrome.cdp_port,
                 server_identity=f"rest:{cfg.server.port}",
             ),
-            breakers=self._breakers,
+            breakers=driver_breakers,
             parallel_tabs=cfg.chatgpt.parallel_tabs,
         )
 
@@ -86,6 +87,7 @@ class Service:
 
         # 3. API server
         self._server = APIServer(cfg, self._driver, breakers=self._breakers)
+        await self._server.start_pool()
         self._runner = await self._start_server()
 
         self._print_banner()
@@ -139,6 +141,9 @@ class Service:
 
         if self._runner:
             await self._runner.cleanup()
+
+        if self._server:
+            await self._server.close_pool()
 
         if self._driver:
             await self._driver.close()

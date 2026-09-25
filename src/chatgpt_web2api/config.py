@@ -64,6 +64,9 @@ class ServerConfig:
     host: str = "127.0.0.1"
     api_keys: list[str] = field(default_factory=list)
     request_timeout: int = 120
+    # 1 preserves the legacy singleton. >1 uses independent owned REST tabs.
+    rest_pool_size: int = 1
+    rest_pool_max_queue: int = 32
 
 
 @dataclass
@@ -183,6 +186,14 @@ class Config:
             else:
                 log.debug("No default config at %s; using built-in defaults", default_path)
         cfg._apply_env()
+        if cfg.server.rest_pool_size < 1:
+            raise ValueError("rest_pool_size must be >= 1")
+        if cfg.server.rest_pool_max_queue < 0:
+            raise ValueError("rest_pool_max_queue must be >= 0")
+        if cfg.server.rest_pool_size > 1 and (
+            not cfg.chatgpt.parallel_tabs or cfg.chatgpt.tab_mode != "owned"
+        ):
+            raise ValueError("rest_pool_size > 1 requires parallel_tabs=true and tab_mode=owned")
         # Validate AFTER both file + env overlays are applied — env can fix or
         # break what the file set. This is the first real validation in config;
         # keep it as a single explicit bundle check for the parallel-tabs safety
@@ -293,6 +304,9 @@ class Config:
         c = data.get("request_timeout")
         if c is not None:
             self.server.request_timeout = int(c)
+        for name in ("rest_pool_size", "rest_pool_max_queue"):
+            if name in data:
+                setattr(self.server, name, int(data[name]))
         c = data.get("log_level")
         if c:
             self.log.level = c
@@ -321,6 +335,9 @@ class Config:
             self.server.port = int(v)
         if v := _env("W2A_HOST"):
             self.server.host = v
+        for name in ("rest_pool_size", "rest_pool_max_queue"):
+            if (v := _env("W2A_" + name.upper())) is not None:
+                setattr(self.server, name, int(v))
         if v := _env("W2A_API_KEYS"):
             self.server.api_keys = [k.strip() for k in v.split(",") if k.strip()]
         if v := _env("W2A_DEFAULT_MODEL"):
@@ -392,6 +409,8 @@ class Config:
             "detector_default_stream_idle_timeout_seconds": self.chatgpt.detector_default_stream_idle_timeout_seconds,
             "detector_hard_timeout_seconds": self.chatgpt.detector_hard_timeout_seconds,
             "request_timeout": self.server.request_timeout,
+            "rest_pool_size": self.server.rest_pool_size,
+            "rest_pool_max_queue": self.server.rest_pool_max_queue,
             "log_level": self.log.level,
             "ensure_degraded_poll_interval_s": self.ensure.degraded_poll_interval_s,
             "ensure_degraded_poll_budget_s": self.ensure.degraded_poll_budget_s,
