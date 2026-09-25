@@ -32,7 +32,14 @@ from .config import Config
 from .cross_process_lock import LockAcquisitionError
 from .image_input import ImageInputError, normalize_messages
 from .lock_resolver import MutationLock, OwnedTabRequiredError, resolve_mutation_lock
-from .request_guard import CURRENT_REQUEST, BrowserGuard, BrowserPausedError, RequestState, phase
+from .request_guard import (
+    CURRENT_REQUEST,
+    BrowserGuard,
+    BrowserPausedError,
+    RequestState,
+    new_conversation_retry_policy,
+    phase,
+)
 from .resilience import retry_on_rate_limit
 from .rest_driver_pool import RestDriverPool, RestPoolBusyError
 
@@ -349,6 +356,10 @@ class APIServer:
                 self._last_error_at = None
             if isinstance(response, web.Response) and response.content_type == 'application/json':
                 body = json.loads(response.body)
+                if response.status >= 400:
+                    body['error'].setdefault('automatic_retry_allowed', False)
+                    body['error']['new_conversation_retry'] = new_conversation_retry_policy(
+                        response.status, body['error'], response.headers.get('Retry-After', ''))
                 body['request_diagnostics'] = state.diagnostics(
                     succeeded=response.status < 400 and not state.failed)
                 response.body = json.dumps(body).encode()
@@ -732,11 +743,13 @@ class APIServer:
                 status=503 if isinstance(exc, BrowserPausedError) else 504)
         else:
             response = self._error_response_base(exc)
+        body = json.loads(response.body)
         if state:
-            body = json.loads(response.body)
+            body['error']['new_conversation_retry'] = new_conversation_retry_policy(
+                response.status, body['error'], response.headers.get('Retry-After', ''))
             body['error'].update(state.fields())
             body['request_diagnostics'] = state.diagnostics()
-            response.body = json.dumps(body).encode()
+        response.body = json.dumps(body).encode()
         return response
 
     def _error_response_base(self, exc: Exception) -> web.Response:
@@ -750,8 +763,8 @@ class APIServer:
         - GenerationStuckError → HTTP 504 ``generation_stuck`` — the generation
           stalled (no DOM progress within the stall window); the phase is in the
           message for diagnosis.
-        - Everything else stays a 500 ``server_error`` (a real failure, not
-          retriable).
+        - Everything else stays a 500 ``server_error``. Replacement retries
+          belong to the caller's bounded new-conversation policy.
         """
         from .image_input import ImageUploadTimeout
         from .turn_anchor import TurnReconciliationError

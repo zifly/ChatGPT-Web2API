@@ -2,7 +2,7 @@
 
 更新：2026-09-25。本文对应新增的 REST 浏览器池实现。是否已在目标服务启用，以 `GET /health` 的 `rest_pool.enabled`、`rest_pool.size` 为准；仅更新源码不会更新正在运行的容器。
 
-[中文调用手册](../API使用与项目接入手册.md) · [会话接入与 Python 示例](CONVERSATION-API.md) · [错误与恢复](REQUEST-RECOVERY.md)
+[中文调用手册](../API使用与项目接入手册.md) · [会话接入与 Python 示例](CONVERSATION-API.md) · [错误与恢复](REQUEST-RECOVERY.md) · [放弃旧会话后重试](NEW-CONVERSATION-RETRY.md)
 
 ## 1. 这次改动与兼容范围
 
@@ -24,7 +24,7 @@ NAS Compose 配置为 **2 路处理、最多 32 个等待请求**。不同 `conv
 | 防重复提交 | 同一业务会话上一轮未完成时禁用发送；另一会话仍可发送 | 前端，业务后端也应按会话加锁 |
 | 结果归属 | 响应写回发起请求的业务会话，不能写入“此刻选中的会话” | 前端 |
 | ID 获取 | JSON 读顶层 `conversation_id`；SSE 读成功 stop 事件中的 ID | 解析响应的一方 |
-| 失败处理 | 展示排队超时、队列满、暂停、限流；关闭 SDK/HTTP 自动重试 | 前端与业务后端 |
+| 失败处理 | SDK/HTTP 原样重试关闭；网关可放弃旧尝试、新建会话自动重试一次，并过滤迟到结果 | 前端与业务后端 |
 | 用户权限 | 校验该用户能访问这个业务会话；NAS API Key 留在业务后端 | 业务后端 |
 
 `conversation_id` 是 ChatGPT 网页返回的实际 ID，不能用前端自己的任务号、随机 UUID、`user` 字段或 `metadata` 替代。本次没有实现按这些字段自动绑定会话，也没有新增幂等键。
@@ -57,13 +57,13 @@ NAS Compose 配置为 **2 路处理、最多 32 个等待请求**。不同 `conv
 }
 ```
 
-续聊响应中的 ID 应与请求 ID 相同；不同则停止自动处理，不覆盖原来的映射。A、B 各自保存自己的 ID，可以同时请求。每次都设 `new_conversation: true` 会丢失续聊上下文；携带 ID 又重发整段历史会重复上下文。
+普通续聊响应中的 ID 应与请求 ID 相同；不同则停止自动处理，不覆盖原映射。若网关已明确放弃旧尝试并发起新会话重试，则在校验当前 `attempt_id` 后保存新 ID。A、B 各自保存自己的 ID，可以同时请求。每次都新建会丢失续聊上下文；正常续聊时携带 ID 又重发整段历史会重复上下文。替换重试如何重建历史和图片见[新会话重试约定](NEW-CONVERSATION-RETRY.md)。
 
 使用 OpenAI 兼容 SDK 时，新建字段放在 `extra_body={"new_conversation": True}`，续聊放在 `extra_body={"conversation_id": cid}`，并设置 `max_retries=0`。客户端封装需要保留自定义响应字段。
 
 图片使用相同会话规则。第一轮上传图片并保存 ID，下一轮可只发文字追问。SSE 仍在完整回复核对后输出正文，并非逐 token 输出；必须检查顶层 `error`、`finish_reason` 与最终 `[DONE]`，HTTP 200 本身不代表成功。
 
-前端状态处理示意，`api.chatCompletions` 指项目已有业务后端调用，不能把 NAS 密钥写进浏览器代码：
+以下是单次直通调用的前端状态示意，尚未包含新会话替换重试。`api.chatCompletions` 指项目已有业务后端调用，不能把 NAS 密钥写进浏览器代码。启用网关替换重试后，应按尝试版本接受新的 ID，并相应调整下面的 ID 一致性检查：
 
 ```typescript
 async function sendTurn(session: Session, text: string) {
@@ -97,7 +97,7 @@ async function sendTurn(session: Session, text: string) {
 }
 ```
 
-这是需要接入项目状态管理的示意，不是可直接粘贴运行的完整组件。对于明确 `not_sent` 的错误，可在用户确认后解除 `needsReview` 再发送；不明确的结果先检查原会话。
+这是需要接入项目状态管理的示意，不是完整组件。网关可以对暂时性错误统一执行一次新会话重试，包括 `unknown` 和 `confirmed`；先放弃旧尝试并过滤迟到结果，再重建上下文和图片。最终仍失败时再展示错误，详见[完整流程](NEW-CONVERSATION-RETRY.md)。
 
 ## 4. 排队、错误和恢复
 
@@ -105,18 +105,18 @@ async function sendTurn(session: Session, text: string) {
 
 | 返回 | 含义与处理 |
 |---|---|
-| `503 browser_pool_busy` | 等待队列已满或服务关闭中；请求尚未发送。提示稍后手动再试 |
+| `503 browser_pool_busy` | 等待队列已满或服务关闭中；退避后可在网关的一次重试预算内新建重试 |
 | `504 request_timeout`，`phase=queue` | 排队耗尽预算，`send_state=not_sent`；不会稍后补发 |
 | `503 browser_unresponsive` | 所需槽位/会话暂停，或全部槽位暂停；其他健康会话可能仍可用 |
-| `429 rate_limit_exceeded` | 同一账号共享冷却期，查看 `Retry-After`；不自动重发已有请求 |
-| `send_state=unknown` | 可能已经发送，先检查网页和日志，不得直接补发 |
-| `send_state=confirmed` 但失败 | 已确认提交，但未取得成功回复；先检查原会话 |
+| `429 rate_limit_exceeded` | 同一账号共享冷却期，等待 `Retry-After` 后才可新建重试；不能换会话绕过限流 |
+| `send_state=unknown` | 可能已经发送；可放弃旧尝试并新建重试一次，旧结果必须丢弃 |
+| `send_state=confirmed` 但失败 | 已确认提交；同样允许放弃旧尝试、新建重试一次 |
 
-错误沿用 `error.phase`、`error.send_state`、`error.prompt_sent`、`error.automatic_retry_allowed=false`。响应诊断中的 `request_diagnostics.browser_slot` 表示使用了哪个槽位，仅供排障，不是客户端路由参数。
+错误沿用 `error.phase`、`error.send_state`、`error.prompt_sent`。`automatic_retry_allowed=false` 禁止普通 SDK 原样重放；新增 `error.new_conversation_retry` 明确允许网关在新会话替换重试，包含 `allowed`、`mode`、`max_retries` 和 `retry_after_seconds`。整个业务任务最多自动重试一次，由网关执行预算和结果版本校验。响应诊断中的 `request_diagnostics.browser_slot` 仅供排障，不是客户端路由参数。
 
 单个槽位超时或发送结果不确定时会暂停，并保留已知的会话绑定，避免同一 ID 换到另一个健康槽位继续发送。其他健康槽位可以服务其他会话。账号限流和 Chrome 整体故障仍会影响全部槽位。
 
-管理员检查现场后，可带现有 Bearer 密钥调用 `POST /v1/browser/recover?slot=0`，槽位编号取自 `/health.rest_pool.slots`。不传 slot 时探测暂停槽位；没有暂停槽位时探测全部槽位。忙碌的槽位返回 503，不中断正在处理的请求。恢复只做只读探测，不重放消息，不清除账号冷却；它不能确认之前的业务请求是否成功。
+需要恢复故障槽位时，可带现有 Bearer 密钥调用 `POST /v1/browser/recover?slot=0`。新会话重试可直接使用其他健康槽位；旧任务既已放弃，无需先确认它是否完成。没有可用槽位时才在重试流程中做只读恢复；不为单个失败请求重启整个服务。不传 slot 时探测暂停槽位；没有暂停槽位时探测全部槽位。忙碌的槽位返回 503，不中断当前请求。恢复不重放消息、不清除账号冷却。
 
 ## 5. 服务端配置、确认与回退
 
@@ -148,7 +148,7 @@ async function sendTurn(session: Session, text: string) {
 3. A 正在发送时不能再点发 A，但仍能发 B；首次新建也要防重复点击。
 4. 同时提交第三个独立会话，确认排队；排队请求取消或超时后不会再发送。
 5. 验证图片上传后按 ID 文字追问；验证 SSE 成功 stop 中的 ID 和最终 `[DONE]`。
-6. 验证 400、队列满、超时、429、SSE error 的提示与无自动重试行为。
+6. 验证 400/401 不自动重试；超时、5xx、429/SSE error 可按策略新建重试一次，旧结果不回填，第二次失败停止，其他会话不中断。
 
 221 项相关离线测试通过，其中 23 项为新增池测试，另有 26 项图片上传与服务器确认测试，覆盖 HTTP 两路重叠、同 ID 串行、容量/取消、JSON/SSE/图片参数隔离、失败槽位隔离、账号冷却和启动清理；浏览器行为使用合成替身。其中也包括 5 项新增的新会话地址变化回归和 34 项消息归属选择测试，覆盖严格会话校验及同文不同消息的误匹配防护。
 

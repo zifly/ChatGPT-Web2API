@@ -7,8 +7,6 @@ services:
         HTTP_PROXY: ${W2A_BUILD_PROXY_URL:-}
         HTTPS_PROXY: ${W2A_BUILD_PROXY_URL:-}
         PIP_INDEX_URL: ${W2A_PIP_INDEX_URL:-https://pypi.org/simple}
-      extra_hosts:
-        - "host.docker.internal:host-gateway"
     container_name: chatgpt-web2api
     env_file:
       - ./data/api.env

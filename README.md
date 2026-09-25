@@ -15,6 +15,7 @@ Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API)
 | Backend-managed conversations | [后端会话接入](docs/CONVERSATION-API.md) | [Conversation integration (bilingual)](docs/CONVERSATION-API.md) |
 | Web citation sources | [引用来源与显示](docs/CITATIONS.md#中文) | [Citation sources and rendering](docs/CITATIONS.md#english) |
 | Timeouts and browser recovery | [超时与恢复](docs/REQUEST-RECOVERY.md#中文) | [Request deadlines and recovery](docs/REQUEST-RECOVERY.md#english) |
+| Retry after abandoning a conversation | [新会话重试约定](docs/NEW-CONVERSATION-RETRY.md) | [Replacement retry](docs/NEW-CONVERSATION-RETRY.md#english) |
 
 ## What this fork changes / 修改内容
 
@@ -37,6 +38,8 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 我们修复的是采集层的丢字、重复和错误拼接，不是通过补括号或猜测 ID 修复 JSON。模型本身仍可能生成格式不合要求或语义错误的内容，调用方需要校验。
 
 **前端兼容重点：** 成功响应格式保持兼容，但池模式下不传 `conversation_id` 就会新建会话。前端需为每个业务会话分别保存 ID、阻止重复提交，并将回复写回发起请求的会话。依赖隐式续聊或全局共用一个 ID 的实现，须按[迁移清单](docs/REST-CONCURRENCY.md)调整。
+
+**允许新会话重试：** 超时或暂时性失败后，网关可放弃旧尝试，在全新会话自动重试一次；旧结果必须丢弃，必要上下文和图片由业务侧重建。普通 SDK 原样重试保持关闭。错误中的 `new_conversation_retry` 提供策略提示；详见[重试流程](docs/NEW-CONVERSATION-RETRY.md)。
 
 网页引用会随回复返回编号、标题和网址，需要调用项目的前端显示为链接。没有可靠对应关系时不会猜测网址，旧回复也不会自动补齐来源。引用功能已通过离线测试，真实 NAS 网页验收仍待完成。
 
@@ -69,7 +72,7 @@ API keys, cookies, Chrome profiles, VNC passwords, runtime logs and historical d
 
 ## Validation / 验证范围（2026-09-25）
 
-- **221 related offline tests passed** for REST workers, conversation identity, queueing/cancellation, deadlines, limits, JSON/SSE and image processing confirmation. This is the related suite, not the entire repository test suite.
+- **235 related offline tests passed** for REST workers, conversation identity, queueing/cancellation, deadlines, limits, JSON/SSE, image processing confirmation and new-conversation retry hints. This is the related suite, not the entire repository test suite.
 - **Four live synthetic NAS requests passed:** concurrent new text and blue-image conversations, followed by concurrent JSON/SSE continuations. Observed `peak_active=2`; IDs stayed distinct and stable, each chat recalled its own code, and SSE ended with `stop` and `[DONE]`.
 - Modern/legacy upload-form checks passed in a real browser. Final health showed two connected, idle workers with no pauses or queued requests. See [timings and client acceptance](docs/REST-CONCURRENCY.md).
 

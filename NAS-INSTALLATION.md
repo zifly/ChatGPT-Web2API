@@ -73,7 +73,7 @@ For mainland-China network environments, these are optional examples for your lo
 ```dotenv
 W2A_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 # Optional reachable HTTP proxy; replace the port:
-# W2A_BUILD_PROXY_URL=http://host.docker.internal:3128
+# W2A_BUILD_PROXY_URL=http://192.168.1.100:3128
 # W2A_PROXY_URL=http://host.docker.internal:3128
 ```
 
@@ -81,6 +81,7 @@ Mirrors and proxies are independent. Changing package sources does not configure
 
 - `W2A_PROXY_URL` sets the runtime browser/service proxy.
 - `W2A_BUILD_PROXY_URL` sets the proxy for build downloads.
+- Use an address reachable from the build environment, such as your NAS LAN IP. Some NAS builders do not support a `host-gateway` mapping during image builds.
 - Container `127.0.0.1` refers to that container. For a proxy on the NAS host, use `host.docker.internal` with its actual HTTP port and allow connections from the container network. Do not confuse HTTP and SOCKS ports.
 - Do not put proxy account passwords in build settings. Keep local settings out of the repository.
 - If Docker fails while pulling the `FROM python:...` image, the build steps have not started. Check the Docker daemon/Desktop proxy; `W2A_BUILD_PROXY_URL` does not configure base-image pulls.

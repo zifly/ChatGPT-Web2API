@@ -104,7 +104,7 @@ REST 池模式允许不同会话并发，NAS Compose 配置为两路，超出排
 | 文字完整但业务 JSON/schema 不合格 | 保留会话 ID，记为业务校验失败；由业务规则决定是否追问修正 |
 | 后端进程重启 | 从自己的持久化记录恢复映射，不依赖 web2api 的“上次会话”状态 |
 
-连接失败不等于消息未发送，尤其是请求发出后的超时。首次新建请求超时还可能导致后端拿不到已经生成的 ID。因此不要开启自动 HTTP/SDK 重试；服务内部仍有其他重试机制，本项目不提供端到端幂等键或“恰好一次”保证。
+连接失败不等于消息未发送，首次新建超时也可能导致调用方拿不到已经生成的 ID。允许网关放弃旧尝试、在新会话重试一次：清除旧 ID、重建输入，并用尝试版本过滤迟到结果。普通 HTTP/SDK 原样重试仍关闭；新会话 ID 可在确认有效尝试后替换旧映射。详见[新会话重试](NEW-CONVERSATION-RETRY.md)。这不提供端到端幂等或“恰好一次”保证。
 
 ## 5. 可直接改造的 Python 示例
 
@@ -186,7 +186,7 @@ Persist logical session ownership, task/batch and rule version, service/account 
 
 Check HTTP 200, nonempty content, `finish_reason=stop` and a nonempty conversation ID. Continued responses should return the requested ID. Store the successful transport result before applying business JSON/schema/candidate validation: invalid business content can still be a completed turn in the website history. Do not resend all history together with the original ID.
 
-Disable automatic client retries. A timeout or disconnect may occur after submission, and a timed-out new request may have created a conversation whose ID was not received. Record uncertain outcomes and inspect before resubmitting. Unavailable explicit IDs must not silently fall back to new chats. No end-to-end idempotency or exactly-once contract is implemented; internal retry mechanisms remain.
+Keep ordinary HTTP/SDK retries disabled. A gateway may explicitly abandon a failed attempt and retry once in a new conversation, rebuilding context and attachments and rejecting all stale results. Save the new ID only for the current attempt. See [replacement retry](NEW-CONVERSATION-RETRY.md). The driver never silently redirects an explicit ID; replacement is a deliberate gateway action, with no exactly-once guarantee.
 
 The Python example above uses standard-library HTTP, propagates failures and sends two real requests only when executed as a script. Configure the base URL and service key through its named environment variables; add persistence and queueing in your own backend. SDK callers can use `extra_body` for the extension fields and `max_retries=0`.
 

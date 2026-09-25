@@ -75,11 +75,12 @@ sudo docker compose -f compose.yaml -f compose.headed.yaml up -d --no-build --fo
 ```dotenv
 W2A_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 # 如需代理，填写你自己的可达 HTTP 代理地址：
-# W2A_BUILD_PROXY_URL=http://host.docker.internal:3128
+# W2A_BUILD_PROXY_URL=http://192.168.1.100:3128
 # W2A_PROXY_URL=http://host.docker.internal:3128
 ```
 
 `W2A_PROXY_URL` 配置运行时浏览器/服务代理；构建下载需要另设 `W2A_BUILD_PROXY_URL`。
+构建代理请使用构建环境可直接访问的地址，例如自己的 NAS 局域网 IP；部分 NAS 构建器不支持构建阶段的 `host-gateway` 映射。
 容器内的 127.0.0.1 不是宿主机。代理在宿主机时，可用 `http://host.docker.internal:实际HTTP端口`，并确认代理允许容器访问。
 构建代理不要填写账号密码；这些配置留在本地 `.env`，不提交到仓库。
 

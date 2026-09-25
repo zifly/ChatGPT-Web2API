@@ -81,3 +81,9 @@ An isolated real NAS upload and cleanup passed without sending a prompt.
 Fresh-chat protocol reads now follow at most three provisional route changes only when the outgoing user UUID was captured and no existing conversation was specified. The first backend match for that exact user node pins the conversation. Existing conversation IDs and uncaptured sends keep strict route checks; identical prompt text never substitutes for the captured UUID. Five additional protocol cases and 34 turn-selector cases passed.
 
 The rebuilt NAS deployment passed four live synthetic requests: parallel new text and blue-image conversations (40.08 / 35.28 s), then parallel explicit-ID JSON and SSE follow-ups (6.52 / 6.77 s). IDs remained distinct and stable, each reply recalled its own code, and SSE ended with stop and DONE. Observed peak active workers: 2. See the [acceptance record](REST-CONCURRENCY.md).
+
+## 2026-09-25 New-conversation replacement retries / 放弃旧会话后重试
+
+Gateways may abandon a failed attempt and automatically retry once in a new conversation, even after an uncertain or confirmed submission. JSON/SSE errors advertise `new_conversation_retry` with an allowed flag, one-retry budget and cooldown; the legacy flag still forbids ordinary request replay. Gateways enforce the task-wide budget, rebuild context/images and atomically reject old-attempt events. The driver still sends at most once per request; shared cooldown and worker quarantine remain in effect. The related suite passed 235 tests, including 14 new replacement-policy cases. See [gateway requirements](NEW-CONVERSATION-RETRY.md).
+
+The NAS builder does not support a build-time `host-gateway` mapping. Removed that optional build mapping and documented using a reachable LAN address for build proxies; runtime host mapping is unchanged.

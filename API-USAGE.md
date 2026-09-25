@@ -6,6 +6,8 @@ Updated: 2026-09-25. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` ar
 
 **Concurrent conversations:** see the [REST concurrency migration guide](docs/REST-CONCURRENCY.md) for client changes and acceptance checks. Wire formats remain compatible. Pooled REST always starts a new chat when `conversation_id` is omitted.
 
+**Replacement retries:** a gateway may abandon a failed attempt and retry once in a new conversation, including uncertain or confirmed submissions. Rebuild context/images and discard stale results; keep ordinary SDK replay disabled. See the [retry contract](docs/NEW-CONVERSATION-RETRY.md).
+
 ## 1. Connection settings
 
 | Setting | Value |
@@ -268,7 +270,7 @@ Inspect `chrome_running`, `driver_connected`, `last_error` and `open_breakers`. 
 | 504 / reply_timeout | Final reply could not be confirmed in time; inspect `send_state` / `prompt_sent` and the webpage before resending |
 | 504 / image_upload_timeout | Upload was not confirmed (`prompt_sent=false`); inspect sanitized stage/state and the webpage |
 | 504 / generation_stuck | Generation stall, webpage state and proxy connectivity |
-| 500 or timeout | The message may already have been sent; inspect before retrying |
+| 500 or timeout | The message may already have been sent; a bounded new-conversation replacement is allowed after backoff, discarding the old result |
 | HTTP 200 with empty content | Treat as failure; do not forward as a valid business result |
 | Page answered but API failed | Reply collection/correlation; not by itself a reason to log into Google again |
 
@@ -305,7 +307,7 @@ Authorization: Bearer key from NAS_CHATGPT_API_KEY
 4. Start with string text. For images, follow the documented Base64 image_url contract; do not assume document attachments, tools or response_format are supported.
 5. Read choices[0].message.content; empty output is failure.
 6. Send one 'Reply with exactly: OK' check, then validate representative business samples.
-7. On timeout, inspect the NAS browser/logs before retrying. Distinguish key errors from expired website login.
+7. On timeout or 5xx, the gateway may replace the attempt once in a new conversation, rebuilding inputs and rejecting stale results. Authentication failures require correcting the key or website login first.
 8. Keep keys in private server configuration, never source code, frontend code or Git.
 9. Extract document text in this project; original document uploads are unsupported. Image uploads are covered in the separate image guide.
 10. Preserve existing NAS Docker, profile, cookie and proxy settings.

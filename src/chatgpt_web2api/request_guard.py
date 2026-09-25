@@ -97,7 +97,22 @@ class RequestState:
     def fields(self):
         return {'phase': self.phase, 'send_state': self.send_state,
                 'prompt_sent': {'not_sent': False, 'confirmed': True, 'unknown': None}[self.send_state],
+                # Legacy clients must not blindly replay the original request.
+                # A gateway may instead apply the separate replacement policy.
                 'automatic_retry_allowed': False}
+
+
+def new_conversation_retry_policy(status: int, error: dict, retry_after: str = '') -> dict:
+    """Advertise one gateway-owned replacement; never replay inside the driver.
+
+    The gateway owns the logical task budget and must discard the old attempt,
+    rebuild its inputs and explicitly start a new conversation. The HTTP server
+    cannot count retries across independent client requests.
+    """
+    allowed = (status == 429 or 500 <= status <= 599) and error.get('code') != 'client_disconnected'
+    delay = max(2, int(retry_after or 0)) if allowed else 0
+    return {'allowed': allowed, 'mode': 'new_conversation',
+            'max_retries': 1 if allowed else 0, 'retry_after_seconds': delay}
 
 
 CURRENT_REQUEST: ContextVar[RequestState | None] = ContextVar('w2a_request', default=None)
