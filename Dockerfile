@@ -1,18 +1,29 @@
 FROM python:3.11-slim-trixie
+
+ARG DEBIAN_MIRROR=https://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=https://security.debian.org/debian-security
 ARG PIP_INDEX_URL=https://pypi.org/simple
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates curl gnupg \
-    && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub -o /tmp/google.asc \
+# Keep signature verification; only replace the Debian mirror endpoints.
+RUN sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g; s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::http::Pipeline-Depth "0";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99build-network \
+    && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Chrome remains on Google's signed official repository.
+RUN mkdir -p /etc/apt/keyrings \
+    && curl --retry 3 --connect-timeout 20 -fsSL https://dl.google.com/linux/linux_signing_key.pub -o /tmp/google.asc \
     && gpg --batch --dearmor -o /etc/apt/keyrings/google.gpg /tmp/google.asc \
     && rm /tmp/google.asc \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google.list \
-    && apt-get update && apt-get install -y google-chrome-stable \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
+# Explicit inputs keep local credentials, profiles and reports out of all layers.
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+COPY scripts/check-nas-api.py ./scripts/check-nas-api.py
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 
 # Persistent Chrome profile (stores login session)

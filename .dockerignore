@@ -15,6 +15,10 @@ venv/
 dist/
 build/
 *.log
+*.har
+*.sqlite*
+*.db
+**/chrome-profile/
 
 .auth_token
 .chrome-profile/

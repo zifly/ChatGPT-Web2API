@@ -23,7 +23,7 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 
 - **NAS deployment:** signed Google Chrome package keyring, explicit base/desktop images, persistent private data and configurable LAN binding. Both API and desktop ports default to loopback.
 - **Browser desktop:** Xvfb, x11vnc and noVNC with a private password file. Port `6080/` opens the desktop client directly; `/vnc.html` remains supported.
-- **Optional network settings:** official Debian/PyPI sources and no proxy by default. `W2A_PIP_INDEX_URL`, `W2A_BUILD_PROXY_URL` and `W2A_PROXY_URL` configure the Python source, build proxy and runtime proxy separately.
+- **Optional network settings:** official Debian/PyPI sources and no proxy by default. `W2A_DEBIAN_MIRROR`, `W2A_DEBIAN_SECURITY_MIRROR` and `W2A_PIP_INDEX_URL` configure package sources; `W2A_BUILD_PROXY_URL` and `W2A_PROXY_URL` configure build and runtime proxies separately.
 - **Cookie compatibility:** UTF-8 BOM and SameSite normalization, with CDP import acknowledgments checked.
 - **Concurrent REST conversations:** NAS Compose defaults to two owned browser workers and at most 32 waiting requests. Different conversations overlap; the same ID is serialized within one REST process. Single-worker mode remains available. See [frontend/backend migration](docs/REST-CONCURRENCY.md).
 - **Client-controlled chats:** `new_conversation: true` explicitly starts a new chat; `conversation_id` continues a chosen chat. Conflicting controls return HTTP 400. Omitting both starts fresh in pooled REST; singleton mode retains the legacy behavior. See [API usage](API-USAGE.md#5-independent-tasks-and-continued-conversations).
@@ -46,7 +46,7 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 
 ## Quick start / 快速开始
 
-The source-build workflow is below. If you already have a trusted desktop image built from the required source version, use the [image deployment template](docs/PREBUILT-IMAGE.md) and standalone `compose.image.yaml`, setting `W2A_IMAGE` yourself. This Git commit does not publish a remote image.
+The source-build workflow is below. To deploy a desktop image built from the required source version, use the [image deployment guide](docs/PREBUILT-IMAGE.md) and standalone `compose.image.yaml`, setting `W2A_IMAGE` yourself. The repository's existing workflow builds and publishes images after applicable pushes; confirm that the selected commit's workflow has succeeded before using its image. A source push does not update a running NAS.
 
 Follow the installation guide to create `.env`, `data/api.env` and `data/vnc-password.txt`. For the protocol-reading configuration tested on the NAS, set these in `.env` (replace the example IP):
 
@@ -73,7 +73,7 @@ API keys, cookies, Chrome profiles, VNC passwords, runtime logs and historical d
 
 ## Validation / 验证范围（2026-09-25）
 
-- **235 related offline tests passed** for REST workers, conversation identity, queueing/cancellation, deadlines, limits, JSON/SSE, image processing confirmation and new-conversation retry hints. This is the related suite, not the entire repository test suite.
+- **350 related offline tests passed after integration with the published fork history**, covering REST workers, conversation identity, queueing/cancellation, deadlines, limits, JSON/SSE, image processing confirmation, new-conversation retry hints, navigation recovery and login waiting. This is the related suite, not the entire repository test suite; the earlier replacement-policy selection contained 235 tests.
 - **Four live synthetic NAS requests passed:** concurrent new text and blue-image conversations, followed by concurrent JSON/SSE continuations. Observed `peak_active=2`; IDs stayed distinct and stable, each chat recalled its own code, and SSE ended with `stop` and `[DONE]`.
 - Modern/legacy upload-form checks passed in a real browser. Final health showed two connected, idle workers with no pauses or queued requests. See [timings and client acceptance](docs/REST-CONCURRENCY.md).
 - **Replacement-policy deployment check passed:** the subsequent application-only update retained the existing browser/system dependencies. Live HTTP 400/401 responses correctly disabled replacement retries; health showed two connected, idle workers. These checks sent no chat messages. Gateway retry budgeting, stale-result filtering and frontend ID replacement still require caller-side acceptance; the four live chats above tested the earlier concurrency update.

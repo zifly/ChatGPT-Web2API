@@ -6,13 +6,13 @@ COOKIE_FILE="/data/cookies/cookies.json"
 
 if [ -f "$COOKIE_FILE" ]; then
     echo "Found cookies file, injecting..."
-    
+
     # Start proxy in background (Chrome will launch)
     chatgpt-web2api "$@" &
     PROXY_PID=$!
     # Forward Docker stop to the service so it can close Chrome and release locks.
     trap 'kill -TERM "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" || true; exit 0' TERM INT
-    
+
     # Wait for Chrome CDP to be ready
     echo "Waiting for Chrome CDP..."
     for i in $(seq 1 30); do
@@ -21,13 +21,13 @@ if [ -f "$COOKIE_FILE" ]; then
         fi
         sleep 1
     done
-    
+
     # Inject cookies
     chatgpt-web2api inject-cookies "$COOKIE_FILE" "$@"
-    
+
     # Let cookies propagate to session
     sleep 3
-    
+
     # Wait for the proxy
     wait $PROXY_PID
 else

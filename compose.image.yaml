@@ -1,6 +1,7 @@
 services:
   chatgpt-web2api:
     image: ${W2A_IMAGE:?Set W2A_IMAGE to a trusted desktop image}
+    platform: linux/amd64
     container_name: chatgpt-web2api
     env_file:
       - ./data/api.env
@@ -13,6 +14,7 @@ services:
       - ./data/vnc-password.txt:/run/secrets/vnc-password:ro
     environment:
       - W2A_HEADLESS=false
+      - W2A_LOGIN_TIMEOUT_SECONDS=${W2A_LOGIN_TIMEOUT_SECONDS:-0}
       - W2A_PORT=8080
       - W2A_HOST=0.0.0.0
       - W2A_TAB_MODE=owned

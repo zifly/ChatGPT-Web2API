@@ -22,12 +22,12 @@ ChatGPT has 3 levels of context persistence:
 ```
 Level 1: Single Message (ephemeral)
   → message sent, response received, no memory
-  
+
 Level 2: Multi-turn Conversation (session-scoped)
   → conversation_id tracks a thread of messages
   → ChatGPT remembers earlier messages within the same conversation
   → Dies when conversation is deleted or forgotten
-  
+
 Level 3: Project (persistent across sessions)
   → project_id scopes all conversations to a workspace
   → Has its own memory (facts ChatGPT remembers between conversations)

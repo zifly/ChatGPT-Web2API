@@ -129,11 +129,11 @@ async def test_text_response_streams_delta_unchanged(monkeypatch):
     d._js_strict = _fake_js
     d.type_message = AsyncMock()
     d.click_send = AsyncMock()
-    # A2: _fake_js has no location.href handler → conv_id never resolves →
-    # reconciliation skipped. Mapped to not_ready (faithful to old "").
-    d._fetch_text_for_turn = AsyncMock(
-        return_value=TurnTextResult(status="not_ready")
-    )
+    # Text progress is provisional; supply the completed anchored reply.
+    d._conversation_id_from_url = AsyncMock(return_value="test-conversation")
+    async def final_text(*args):
+        return TurnTextResult(status="matched", text=state["text"])
+    d._fetch_text_for_turn = final_text
 
     chunks = []
     async for chunk in d.send_and_stream("hello", timeout=10000):

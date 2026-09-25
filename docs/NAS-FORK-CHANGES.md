@@ -95,3 +95,7 @@ The replacement-policy application update was deployed while retaining the exist
 README、双语接入手册和 API 参考统一使用新会话替换重试约定。删除旧的“5xx 不可重试”和“REST/SDK 自动原样重发 429”说明，补充 SSE 顶层错误、冷却、任务级一次预算，以及前端保存新 ID、过滤旧事件的要求。放弃表示不再采用旧结果，不代表删除聊天记录或已停止旧生成。
 
 Documentation examples use placeholder addresses, synthetic messages and generic conversation IDs. Private configuration, credentials, browser state, logs and deployment backups remain excluded from Git and Docker build contexts.
+
+## 2026-09-25 Published fork integration / 合并已发布版本
+
+Integrated the existing fork history without replacing its commits. Retained its image-publication workflow, explicit Docker build inputs, optional Debian mirrors, desktop login/shutdown handling, stale Xvfb lock cleanup and earlier regression tests. Local private configuration remains excluded; `compose.image.yaml` requires an explicit image selection. The combined related suite passed 350 offline tests, and static checks passed for the affected application modules. These integration checks did not redeploy or send live chats.

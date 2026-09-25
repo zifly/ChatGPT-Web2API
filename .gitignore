@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.har
+*.sqlite*
+*.db
+**/chrome-profile/
 .env
 *.egg-info/
 dist/

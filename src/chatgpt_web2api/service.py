@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
@@ -95,7 +96,7 @@ class Service:
         # 4. Wait for shutdown signal
         await self._shutdown_event.wait()
 
-    async def _wait_for_login(self, timeout: int = 300) -> None:
+    async def _wait_for_login(self, timeout: int | None = None) -> None:
         """Wait for the user to log into ChatGPT in the Chrome window."""
         print()
         print("=" * 52)
@@ -112,8 +113,15 @@ class Service:
         except Exception:
             pass
 
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        if timeout is None:
+            timeout = int(os.environ.get("W2A_LOGIN_TIMEOUT_SECONDS", "300"))
+        if timeout < 0:
+            raise ValueError("W2A_LOGIN_TIMEOUT_SECONDS must be non-negative")
+        # A desktop installation can wait indefinitely for interactive login.
+        deadline = time.monotonic() + timeout if timeout else None
+        while deadline is None or time.monotonic() < deadline:
+            if self._shutdown_event.is_set():
+                raise asyncio.CancelledError()
             try:
                 # Try to get an auth token
                 raw = await self._driver._js(

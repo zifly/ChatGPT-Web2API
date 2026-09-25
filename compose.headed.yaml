@@ -9,6 +9,7 @@ services:
     environment:
       - W2A_REPLY_SOURCE=${W2A_REPLY_SOURCE:-reconciled}
       - W2A_HEADLESS=false
+      - W2A_LOGIN_TIMEOUT_SECONDS=${W2A_LOGIN_TIMEOUT_SECONDS:-0}
       - DISPLAY=:99
       - PYTHONUNBUFFERED=1
     volumes:

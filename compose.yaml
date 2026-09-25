@@ -6,6 +6,9 @@ services:
       args:
         HTTP_PROXY: ${W2A_BUILD_PROXY_URL:-}
         HTTPS_PROXY: ${W2A_BUILD_PROXY_URL:-}
+        NO_PROXY: ${W2A_BUILD_NO_PROXY:-localhost,127.0.0.1,::1}
+        DEBIAN_MIRROR: ${W2A_DEBIAN_MIRROR:-https://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${W2A_DEBIAN_SECURITY_MIRROR:-https://security.debian.org/debian-security}
         PIP_INDEX_URL: ${W2A_PIP_INDEX_URL:-https://pypi.org/simple}
     container_name: chatgpt-web2api
     env_file:
@@ -24,6 +27,7 @@ services:
       - W2A_PARALLEL_TABS=true
       - W2A_REST_POOL_SIZE=${W2A_REST_POOL_SIZE:-2}
       - W2A_REST_POOL_MAX_QUEUE=${W2A_REST_POOL_MAX_QUEUE:-32}
+      - W2A_REPLY_SOURCE=${W2A_REPLY_SOURCE:-reconciled}
 
       # ---------------- 代理设置 ----------------
       # Optional runtime proxy, configured only in the private .env file.

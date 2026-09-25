@@ -26,13 +26,14 @@ from chatgpt_web2api.cdp_driver import CDPDriver, NavigationReadinessProbe
 
 def _probe_payload(*, url="https://chatgpt.com/c/conv-123",
                    ready_state="complete", app_shell=True,
-                   composer=True):
+                   composer=True, composer_usable=True):
     """Build the JSON the staged probe JS returns."""
     return json.dumps({
         "url": url,
         "ready_state": ready_state,
         "app_shell": app_shell,
         "composer": composer,
+        "composer_usable": composer_usable,
     })
 
 
@@ -48,6 +49,7 @@ class TestNavigationReadinessProbe:
             ready_state="complete",
             app_shell_present=True,
             composer_present=True,
+            composer_usable=True,
         )
         assert probe.is_ready(url_correct=True) is True
 
@@ -68,6 +70,7 @@ class TestNavigationReadinessProbe:
             ready_state="complete",
             app_shell_present=True,
             composer_present=True,
+            composer_usable=True,
         )
         assert probe.is_ready(url_correct=False) is False
 
@@ -101,6 +104,7 @@ class TestNavigationReadinessProbe:
             ready_state="complete",
             app_shell_present=True,
             composer_present=True,
+            composer_usable=True,
         )
         summary = probe.diagnostic_summary(url_correct=False)
         assert "url" in summary.lower() or "displac" in summary.lower(), (
@@ -114,7 +118,7 @@ class TestNavigationReadinessProbe:
 def _make_driver():
     """A CDPDriver with a mock transport for testing."""
     driver = MagicMock(spec=CDPDriver)
-    driver._cdp = AsyncMock()
+    driver._cdp = AsyncMock(return_value={})
     driver._js_strict = AsyncMock(return_value="{}")
     driver._js = AsyncMock(return_value="")
     driver._current_conv_id = None
@@ -127,7 +131,7 @@ async def test_navigate_succeeds_when_all_stages_pass(monkeypatch):
     """When all readiness stages pass, navigate_conversation completes
     without raising and sets _current_conv_id."""
     driver = CDPDriver(cdp_port=9222)
-    driver._cdp = AsyncMock()
+    driver._cdp = AsyncMock(return_value={})
     driver._js_strict = AsyncMock(return_value=_probe_payload())
 
     await driver.navigate_conversation("conv-123")
@@ -141,7 +145,7 @@ async def test_navigate_fails_with_diagnostic_on_composer_missing(monkeypatch):
     import time
 
     driver = CDPDriver(cdp_port=9222)
-    driver._cdp = AsyncMock()
+    driver._cdp = AsyncMock(return_value={})
     # URL correct, doc loaded, app shell present, but composer never appears.
     driver._js_strict = AsyncMock(return_value=_probe_payload(composer=False))
 
@@ -172,7 +176,7 @@ async def test_navigate_fast_fails_on_url_displacement(monkeypatch):
     import time
 
     driver = CDPDriver(cdp_port=9222)
-    driver._cdp = AsyncMock()
+    driver._cdp = AsyncMock(return_value={})
 
     # First poll: URL is correct (still loading). Then 2 displaced polls
     # (debounce requires 2 consecutive wrong polls per ChatGPT review finding B).
@@ -221,7 +225,7 @@ async def test_navigate_waits_for_document_ready(monkeypatch):
     the stall budget. This tests the document.readyState check."""
 
     driver = CDPDriver(cdp_port=9222)
-    driver._cdp = AsyncMock()
+    driver._cdp = AsyncMock(return_value={})
 
     # First 3 polls: loading. Then: complete + composer present.
     loading = _probe_payload(ready_state="loading", app_shell=False, composer=False)

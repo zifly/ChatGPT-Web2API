@@ -1,0 +1,81 @@
+name: Publish NAS image
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'Dockerfile.headed'
+      - 'docker-*.sh'
+      - 'pyproject.toml'
+      - 'scripts/check-nas-api.py'
+      - '.dockerignore'
+      - '.github/workflows/publish-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-nas-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'zifly/chatgpt-web2api-nas' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/zifly/chatgpt-web2api-nas
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build base and desktop (amd64)
+        run: |
+          docker build --pull --platform linux/amd64 -t chatgpt-web2api-base:local .
+          docker build --platform linux/amd64 -f Dockerfile.headed \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.licenses=MIT" \
+            -t "$IMAGE:sha-$GITHUB_SHA" .
+      - name: Check packaged application and desktop without an account
+        run: |
+          docker run --rm --entrypoint python "$IMAGE:sha-$GITHUB_SHA" -c \
+            'import PIL; import chatgpt_web2api.api_server; import chatgpt_web2api.image_input; import chatgpt_web2api.protocol_reply'
+          docker run --rm --entrypoint sh "$IMAGE:sha-$GITHUB_SHA" -ec '
+            google-chrome --version
+            test -f /usr/share/novnc/index.html
+            test -f /app/scripts/check-nas-api.py
+            test ! -e /app/.git
+            test ! -e /app/.env
+            test ! -e /app/data
+            test ! -e /app/tests
+            command -v Xvfb
+            command -v x11vnc
+            command -v websockify
+            bash -n /docker-desktop.sh /docker-entrypoint.sh /usr/local/bin/docker-chrome
+          '
+      - name: Sign in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish commit and release tags
+        run: |
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            docker tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE:$GITHUB_REF_NAME"
+            docker push "$IMAGE:$GITHUB_REF_NAME"
+          else
+            docker tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
+          echo "Published $IMAGE:sha-$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sign out
+        if: always()
+        run: docker logout ghcr.io
