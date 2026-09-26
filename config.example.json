@@ -20,6 +20,8 @@
   "request_timeout": 120,
   "rest_pool_size": 1,
   "rest_pool_max_queue": 32,
+  "usage_db_path": "~/.chatgpt-web2api/usage.sqlite3",
+  "usage_retention_days": 90,
   "log_level": "INFO",
   "ensure_degraded_poll_interval_s": 2.0,
   "ensure_degraded_poll_budget_s": 20.0,

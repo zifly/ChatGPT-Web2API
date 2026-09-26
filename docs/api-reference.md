@@ -32,6 +32,7 @@ POST /v1/chat/completions
 | `stream` | boolean | no | Enable SSE streaming (default: `false`) |
 | `new_conversation` | boolean | no | Force a fresh chat; cannot be true with a nonempty conversation ID |
 | `conversation_id` | string | no | Resume the saved webpage ID; send only new turn content |
+| `progress_id` | UUID string | no | Fresh per-attempt ID for concurrent progress polling with the same API key; not a conversation ID or durable idempotency key |
 | `temperature` | float | no | Ignored — ChatGPT controls this |
 | `max_tokens` | int | no | Ignored — ChatGPT controls this |
 
@@ -61,6 +62,36 @@ data: {"id":"chatcmpl-response-id","object":"chat.completion.chunk","conversatio
 
 data: [DONE]
 ```
+
+### Request progress
+
+`GET /v1/requests/{progress_id}` returns the stage and elapsed timings of an
+opted-in chat, including while a non-streaming POST is still waiting. Use the
+same API key as the POST and poll about once per second. Check
+`/health.request_progress.supported` for availability. Status is `running`,
+`succeeded`, `failed` or `cancelled`; the original POST supplies the actual
+answer, conversation ID and error. Unknown/expired/other-key records return 404.
+
+Storage is limited to 256 records in one REST process; completed records expire
+after 300 seconds and disappear on restart. Duplicate registered IDs return 409
+before browser work. Progress contains no chat content and never sends or
+replays a message. Final `request_diagnostics` adds `phase`,
+`phase_elapsed_seconds` and cumulative `phase_timings`, even without polling.
+See [schema, stage labels and caller requirements](REQUEST-PROGRESS.md).
+
+### Usage statistics
+
+Open `/stats` for the built-in dashboard, or query `GET /v1/stats?period=today`
+with the same service API key used for chat. Supported periods are `today`,
+`7d`, and `30d`, using Shanghai dates. Statistics are key-scoped and cover
+authenticated terminal REST chat attempts, including failures and cancellation.
+Progress polls are excluded. SQLite history is retained for 90 days by default;
+the Compose deployment persists it in `data/usage`.
+
+The response contains `summary`, `daily`, `phase_averages`, `recent`, `live`,
+`capacity`, `storage`, and recording/report timestamps. Byte counts describe
+application bodies, not browser traffic or token usage. See the
+[complete metric definitions and retention contract](USAGE-DASHBOARD.md).
 
 ### Models
 

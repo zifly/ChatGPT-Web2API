@@ -11,7 +11,7 @@ Updated: 2026-09-20. Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo
 To skip building on your NAS, use the [prebuilt-image instructions](docs/PREBUILT-IMAGE.md#english) with the standalone `compose.image.yaml`. The private configuration below is shared by both installation methods; the build commands later in this guide apply only to source installations.
 
 ```sh
-mkdir -p data/chrome-profile data/cookies
+mkdir -p data/chrome-profile data/cookies data/usage
 cp .env.example .env
 ```
 

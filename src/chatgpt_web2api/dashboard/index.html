@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>运行概览 · Web2API</title>
+    <link rel="stylesheet" href="/stats/style.css" />
+    <script defer src="/stats/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/stats"
+        ><span class="brand-icon">W</span> Web2API
+        <span class="brand-slash">/</span
+        ><span class="brand-section">使用统计</span></a
+      ><span class="connection" id="connection">正在连接</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">SERVICE ANALYTICS</p>
+          <h1>运行概览</h1>
+          <p class="subtitle">了解每一次调用，以及等待发生在哪里。</p>
+        </div>
+        <div class="scope">
+          <span class="scope-dot"></span>当前服务密钥的调用 · 上海时间
+        </div>
+      </section>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <button id="retry-load" class="subtle" hidden>重新读取统计</button>
+      <section id="login" class="login panel" hidden>
+        <span class="login-mark">↗</span>
+        <h2>查看你的服务统计</h2>
+        <p>
+          输入服务 API Key，查看此密钥下的调用记录。可在这台设备上保留登录，刷新无需重复输入。
+        </p>
+        <form id="login-form">
+          <label for="api-key">服务 API Key</label>
+          <div class="login-fields">
+            <input
+              id="api-key"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="输入 API Key"
+              required
+            /><button class="primary" type="submit">
+              查看统计 <span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <label class="remember-label" for="remember-key">
+            <input id="remember-key" type="checkbox" checked />
+            在这台设备上记住 7 天
+          </label>
+          <p class="remember-note">勾选后密钥保存在此浏览器中，退出时清除；共用设备可取消勾选。</p>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </section>
+      <div id="dashboard" hidden>
+        <section class="toolbar" aria-label="统计范围和刷新">
+          <div class="segmented" role="group" aria-label="时间范围">
+            <button data-period="today" aria-pressed="true" class="selected">
+              今日</button
+            ><button data-period="7d" aria-pressed="false">近 7 天</button
+            ><button data-period="30d" aria-pressed="false">近 30 天</button>
+          </div>
+          <div class="refresh-tools">
+            <span id="updated" class="muted">尚未更新</span
+            ><label class="auto-label"
+              ><input
+                id="auto-refresh"
+                type="checkbox"
+                checked
+              />自动刷新</label
+            ><button id="refresh" class="subtle">↻ 刷新</button
+            ><button id="logout" class="subtle">退出</button>
+          </div>
+        </section>
+        <section class="metrics" aria-label="使用摘要">
+          <article class="metric">
+            <p class="metric-label">
+              完成调用 <span class="metric-icon">↗</span>
+            </p>
+            <p class="metric-value" id="total">—</p>
+            <p class="metric-note" id="counts">成功、失败及取消的请求尝试</p>
+          </article>
+          <article class="metric">
+            <p class="metric-label">
+              成功率 <span class="metric-icon">✓</span>
+            </p>
+            <p class="metric-value" id="success-rate">—</p>
+            <p class="metric-note">成功次数 / 全部完成调用</p>
+          </article>
+          <article class="metric">
+            <p class="metric-label">
+              平均耗时 <span class="metric-icon">◷</span>
+            </p>
+            <p class="metric-value" id="average">—</p>
+            <p class="metric-note" id="p95">P95 —</p>
+          </article>
+          <article class="metric">
+            <p class="metric-label">
+              接口正文流量 <span class="metric-icon">⇄</span>
+            </p>
+            <p class="metric-value" id="traffic">—</p>
+            <p class="metric-note" id="traffic-detail">请求 — · 响应 —</p>
+          </article>
+        </section>
+        <section class="live-strip" aria-label="实时状态">
+          <div class="live-title"><span class="scope-dot"></span>实时调用</div>
+          <span>执行中 <strong id="active">0</strong></span
+          ><span>排队中 <strong id="queued">0</strong></span
+          ><span class="live-divider"></span
+          ><span>服务浏览器槽位 <strong id="capacity">—</strong></span
+          ><span class="live-caption">当前密钥 · 每 5 秒更新</span>
+        </section>
+        <div class="charts">
+          <section class="panel trend-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>调用趋势</h2>
+                <p>按请求开始日期归属，统计已结束的调用</p>
+              </div>
+              <div class="legend">
+                <span><i class="success-dot"></i>成功</span
+                ><span><i class="failed-dot"></i>失败</span
+                ><span><i class="cancelled-dot"></i>取消</span>
+              </div>
+            </div>
+            <div id="trend" class="trend" aria-label="每日调用次数柱状图"></div>
+            <p id="trend-empty" class="empty" hidden>
+              这个时间范围还没有调用记录。
+            </p>
+            <div class="chart-foot">
+              <span>Asia/Shanghai · 每日 00:00 分界</span
+              ><span id="daily-summary">—</span>
+            </div>
+          </section>
+          <section class="panel phases-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>时间花在哪里</h2>
+                <p>进入该阶段的调用，平均累计耗时</p>
+              </div>
+            </div>
+            <div id="phases" class="phases"></div>
+            <p id="phases-empty" class="empty" hidden>
+              完成第一条调用后，阶段耗时会显示在这里。
+            </p>
+            <p class="phase-note">等待回复包含生成、读取与核对。</p>
+          </section>
+        </div>
+        <section class="panel records">
+          <div class="panel-heading">
+            <div>
+              <h2>
+                最近调用 <span id="record-count" class="count-pill">0</span>
+              </h2>
+              <p>当前时间范围内最近 50 次已结束尝试；正在处理的请求见上方实时调用。</p>
+            </div>
+            <label class="filter-label"
+              >状态<select id="status-filter">
+                <option value="all">全部状态</option>
+                <option value="succeeded">成功</option>
+                <option value="failed">失败</option>
+                <option value="cancelled">取消</option>
+              </select></label
+            >
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>开始时间</th>
+                  <th>请求 ID</th>
+                  <th>状态</th>
+                  <th>方式</th>
+                  <th>耗时</th>
+                  <th>请求 / 响应</th>
+                  <th>结束说明</th>
+                </tr>
+              </thead>
+              <tbody id="records-body"></tbody>
+            </table>
+          </div>
+          <p id="records-empty" class="empty" hidden>
+            暂无符合条件的调用记录。
+          </p>
+          <div class="records-foot">
+            <span id="recovery-summary"
+              >准备阶段重试 0 次 · 回复读取恢复 0 次</span
+            ><span>新会话替换重试会作为独立调用计数</span>
+          </div>
+        </section>
+        <footer>
+          <p>
+            <span class="foot-mark">i</span>仅统计 REST
+            聊天尝试；进度查询不计入。流量为接口正文大小，不含浏览器网络流量。真实
+            Token 用量暂不可得。
+          </p>
+          <div>
+            <p id="retention">记录保留 90 天，不保存聊天正文或密钥。</p>
+            <p id="recording-since">
+              启用后的调用才会记入，历史数据不会自动回填。
+            </p>
+          </div>
+        </footer>
+      </div>
+      <p id="loading" class="loading">正在读取统计…</p>
+    </main>
+  </body>
+</html>

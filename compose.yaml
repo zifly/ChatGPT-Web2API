@@ -19,6 +19,7 @@ services:
       # Private login state; never include these directories in Git or images.
       - ./data/chrome-profile:/data/chrome-profile
       - ./data/cookies:/data/cookies:ro
+      - ./data/usage:/data/usage
     environment:
       - W2A_HEADLESS=true
       - W2A_PORT=8080
@@ -27,6 +28,8 @@ services:
       - W2A_PARALLEL_TABS=true
       - W2A_REST_POOL_SIZE=${W2A_REST_POOL_SIZE:-2}
       - W2A_REST_POOL_MAX_QUEUE=${W2A_REST_POOL_MAX_QUEUE:-32}
+      - W2A_USAGE_DB_PATH=/data/usage/usage.sqlite3
+      - W2A_USAGE_RETENTION_DAYS=${W2A_USAGE_RETENTION_DAYS:-90}
       - W2A_REPLY_SOURCE=${W2A_REPLY_SOURCE:-reconciled}
 
       # ---------------- 代理设置 ----------------

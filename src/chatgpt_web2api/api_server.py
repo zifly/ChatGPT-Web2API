@@ -4,18 +4,21 @@ Endpoints:
   POST /v1/chat/completions  — chat (streaming + non-streaming)
   GET  /v1/models            — model catalog
   GET  /v1/projects          — ChatGPT projects
+  GET  /v1/requests/{id}     — credential-scoped request progress
   GET  /health               — health + Chrome status
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from aiohttp import web
 
@@ -40,8 +43,15 @@ from .request_guard import (
     new_conversation_retry_policy,
     phase,
 )
+from .request_progress import (
+    ProgressCapacityError,
+    ProgressConflictError,
+    RequestProgressStore,
+    normalize_progress_id,
+)
 from .resilience import retry_on_rate_limit
 from .rest_driver_pool import RestDriverPool, RestPoolBusyError
+from .usage_stats import UsageAttempt, UsageStore, UsageStreamResponse
 
 logger = logging.getLogger(__name__)
 
@@ -93,15 +103,80 @@ class APIServer:
         self._last_conv_id: str | None = None
         self._last_project_id: str | None = None
         self._driver_pool: RestDriverPool | None = None
+        self._progress = RequestProgressStore()
+        self._usage = UsageStore(config.server.usage_db_path, config.server.usage_retention_days)
 
-        self.app = web.Application(client_max_size=10 * 1024 * 1024)
+        self.app = web.Application(client_max_size=10 * 1024 * 1024,
+                                   middlewares=[self._usage_middleware])
+        self.app.on_startup.append(self._start_usage)
+        self.app.on_cleanup.append(self._close_usage)
         self.app.router.add_post("/v1/chat/completions", self._handle_chat)
         self.app.router.add_post("/chat/completions", self._handle_chat)
+        self.app.router.add_get('/v1/requests/{progress_id}', self._handle_request_progress)
+        self.app.router.add_get('/v1/stats', self._handle_stats)
+        self.app.router.add_get('/stats', self._handle_stats_page)
+        self.app.router.add_get('/stats/{asset}', self._handle_stats_page)
         self.app.router.add_post("/v1/browser/recover", self._handle_browser_recover)
         self.app.router.add_get("/v1/models", self._handle_models)
         self.app.router.add_get("/v1/projects", self._handle_projects)
         self.app.router.add_get("/health", self._handle_health)
         self.app.router.add_get("/", self._handle_health)
+
+    async def _start_usage(self, app):
+        await self._usage.start()
+
+    async def _close_usage(self, app):
+        await self._usage.close()
+
+    @web.middleware
+    async def _usage_middleware(self, request, handler):
+        if (request.method != 'POST' or request.path not in ('/v1/chat/completions', '/chat/completions')
+                or self._check_auth(request) is not None):
+            return await handler(request)
+        usage = self._usage.begin(self._progress_owner(request))
+        request['usage_attempt'] = usage
+        response = None
+        try:
+            response = await handler(request)
+            return response
+        except asyncio.CancelledError:
+            usage.outcome = 'cancelled'
+            raise
+        except web.HTTPException as exc:
+            response = exc
+            raise
+        finally:
+            if isinstance(response, web.Response) and isinstance(response.body, bytes):
+                usage.response_bytes = len(response.body)
+            self._usage.finish(usage, request.content.total_bytes,
+                               response.status if response is not None else 0)
+
+    async def _handle_stats_page(self, request):
+        asset = request.match_info.get('asset', 'index.html')
+        types = {'index.html': 'text/html', 'app.js': 'text/javascript', 'style.css': 'text/css'}
+        if asset not in types:
+            raise web.HTTPNotFound()
+        return web.Response(body=(Path(__file__).parent / 'dashboard' / asset).read_bytes(),
+            content_type=types[asset], charset='utf-8', headers={
+                'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+                'Referrer-Policy': 'no-referrer',
+                'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; "
+                    "connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+
+    async def _handle_stats(self, request):
+        headers = {'Cache-Control': 'no-store'}
+        if (error := self._check_auth(request)) is not None:
+            error.headers.update(headers)
+            return error
+        try:
+            report = await self._usage.report(self._progress_owner(request), request.query.get('period', 'today'))
+        except ValueError as exc:
+            return web.json_response({'error': {'code': 'invalid_period', 'message': str(exc)}}, status=400, headers=headers)
+        except Exception:
+            return web.json_response({'error': {'code': 'usage_unavailable', 'message': 'Usage storage is unavailable'}},
+                                     status=503, headers=headers)
+        report['capacity'] = self._config.server.rest_pool_size
+        return web.json_response(report, headers=headers)
 
     async def start_pool(self):
         if self._config.server.rest_pool_size > 1:
@@ -160,16 +235,17 @@ class APIServer:
 
     # ── Auth ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _api_key_from_request(request: web.Request) -> str:
+        auth = request.headers.get('Authorization', '')
+        return auth[7:] if auth.startswith('Bearer ') else request.query.get('key', '')
+
     def _check_auth(self, request: web.Request) -> web.Response | None:
         """Check API key if configured. Returns error response or None."""
         keys = self._config.server.api_keys
         if not keys:
             return None
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            key = auth[7:]
-        else:
-            key = request.query.get("key", "")
+        key = self._api_key_from_request(request)
         if key not in keys:
             return web.json_response(
                 {"error": {"message": "Invalid API key", "type": "auth_error"}},
@@ -270,6 +346,8 @@ class APIServer:
                 "open_breakers": open_kinds,
                 "breakers": self._breakers.snapshot(),
                 "rest_pool": pool.snapshot() if pool else {"enabled": False, "size": 1},
+                "request_progress": {"supported": True, "poll_interval_seconds": 1,
+                                     "retention_seconds": self._progress.retention_seconds},
             }
         )
 
@@ -335,8 +413,12 @@ class APIServer:
         state = RequestState(asyncio.get_running_loop().time() + self._config.server.request_timeout,
                              BrowserGuard() if getattr(self, '_driver_pool', None) else self._browser_guard)
         token = CURRENT_REQUEST.set(state)
+        usage = request.get('usage_attempt')
+        if isinstance(usage, UsageAttempt):
+            usage.state = state
         task = asyncio.current_task()
         transport = getattr(request, 'transport', None)
+        outcome = 'failed'
 
         async def watch_disconnect():
             while True:
@@ -351,6 +433,7 @@ class APIServer:
             async with asyncio.timeout_at(state.deadline):
                 response = await self._handle_chat_impl(request)
             if response.status < 400 and not state.failed:
+                outcome = 'succeeded'
                 state.terminal_reason = 'succeeded'
                 self._last_error = None
                 self._last_error_at = None
@@ -369,18 +452,48 @@ class APIServer:
             self._record_request_failure(exc)
             return await self._guard_failure_response(exc)
         except asyncio.CancelledError as exc:
+            outcome = 'cancelled'
             state.terminal_reason = 'cancelled'
             self._record_request_failure(exc)
             if state.disconnected:
                 return self._error_response(TimeoutError('Client disconnected; request stopped'))
             raise
         finally:
+            state.finish()
+            if isinstance(usage, UsageAttempt):
+                usage.outcome = outcome
+            self._progress.finish(state.request_id, outcome)
             logger.info('Request terminal: %s', json.dumps(state.diagnostics()))
             if watcher:
                 watcher.cancel()
                 with suppress(asyncio.CancelledError):
                     await watcher
             CURRENT_REQUEST.reset(token)
+
+    def _progress_owner(self, request):
+        # Scope by the authenticated service key, never by caller-supplied IDs.
+        # No-auth deployments share one namespace, like their other REST data.
+        if not self._config.server.api_keys:
+            return 'anonymous'
+        return hashlib.sha256(self._api_key_from_request(request).encode()).hexdigest()
+
+    async def _handle_request_progress(self, request):
+        if (error := self._check_auth(request)) is not None:
+            error.headers['Cache-Control'] = 'no-store'
+            return error
+        headers = {'Cache-Control': 'no-store'}
+        try:
+            progress_id = normalize_progress_id(request.match_info['progress_id'])
+        except ValueError as exc:
+            return web.json_response({'error': {'type': 'invalid_request_error',
+                'code': 'invalid_progress_id', 'message': str(exc)}}, status=400, headers=headers)
+        snapshot = self._progress.get(self._progress_owner(request), progress_id)
+        if snapshot is None:
+            return web.json_response({'error': {'type': 'invalid_request_error',
+                'code': 'progress_not_found',
+                'message': 'Progress is not registered, has expired, or belongs to another API key'}},
+                status=404, headers=headers)
+        return web.json_response(snapshot, headers=headers)
 
     def _record_request_failure(self, exc):
         state = CURRENT_REQUEST.get()
@@ -587,6 +700,20 @@ class APIServer:
                 {"error": {"message": "No user message", "type": "invalid_request_error"}},
                 status=400,
             )
+
+        if 'progress_id' in body:
+            try:
+                progress_id = normalize_progress_id(body['progress_id'])
+                self._progress.register(self._progress_owner(request), progress_id, CURRENT_REQUEST.get())
+            except ProgressConflictError as exc:
+                return web.json_response({'error': {'type': 'invalid_request_error',
+                    'code': 'progress_id_conflict', 'message': str(exc)}}, status=409)
+            except ProgressCapacityError as exc:
+                return web.json_response({'error': {'type': 'server_error',
+                    'code': 'progress_capacity_exceeded', 'message': str(exc)}}, status=503)
+            except ValueError as exc:
+                return web.json_response({'error': {'type': 'invalid_request_error',
+                    'code': 'invalid_progress_id', 'message': str(exc)}}, status=400)
 
         # Compose final text
         prefix = ""
@@ -980,7 +1107,7 @@ class APIServer:
         # status change is possible, so this must stay pre-prepare.
         await self._check_circuit_or_recover()
 
-        resp = web.StreamResponse()
+        resp = UsageStreamResponse(usage=request.get('usage_attempt'))
         resp.content_type = "text/event-stream"
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"

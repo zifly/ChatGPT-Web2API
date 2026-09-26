@@ -23,6 +23,13 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_usage_database(monkeypatch):
+    """Offline HTTP tests must not write to the user's real usage history."""
+    if not e2e_enabled():
+        monkeypatch.setenv('W2A_USAGE_DB_PATH', ':memory:')
+
+
 def e2e_enabled() -> bool:
     """True iff the operator opted into E2E tests via ``W2A_E2E_RUN=1``."""
     return os.environ.get("W2A_E2E_RUN") == "1"

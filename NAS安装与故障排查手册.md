@@ -13,7 +13,7 @@
 以下命令在 NAS SSH 的项目目录运行：
 
 ```sh
-mkdir -p data/chrome-profile data/cookies
+mkdir -p data/chrome-profile data/cookies data/usage
 cp .env.example .env
 ```
 

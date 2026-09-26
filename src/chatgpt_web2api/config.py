@@ -48,6 +48,10 @@ def _default_user_data_dir() -> str:
     return str(base / "chrome-profile")
 
 
+def _default_usage_db_path() -> str:
+    return os.environ.get('W2A_USAGE_DB_PATH', str(Path.home() / '.chatgpt-web2api' / 'usage.sqlite3'))
+
+
 @dataclass
 class ChromeConfig:
     chrome_path: str = field(default_factory=_default_chrome_path)
@@ -67,6 +71,8 @@ class ServerConfig:
     # 1 preserves the legacy singleton. >1 uses independent owned REST tabs.
     rest_pool_size: int = 1
     rest_pool_max_queue: int = 32
+    usage_db_path: str = field(default_factory=_default_usage_db_path)
+    usage_retention_days: int = 90
 
 
 @dataclass
@@ -186,6 +192,10 @@ class Config:
             else:
                 log.debug("No default config at %s; using built-in defaults", default_path)
         cfg._apply_env()
+        if not 1 <= cfg.server.usage_retention_days <= 3650:
+            raise ValueError('usage_retention_days must be between 1 and 3650')
+        if not cfg.server.usage_db_path:
+            raise ValueError('usage_db_path must not be empty')
         if cfg.server.rest_pool_size < 1:
             raise ValueError("rest_pool_size must be >= 1")
         if cfg.server.rest_pool_max_queue < 0:
@@ -304,7 +314,9 @@ class Config:
         c = data.get("request_timeout")
         if c is not None:
             self.server.request_timeout = int(c)
-        for name in ("rest_pool_size", "rest_pool_max_queue"):
+        if 'usage_db_path' in data:
+            self.server.usage_db_path = str(data['usage_db_path'])
+        for name in ("rest_pool_size", "rest_pool_max_queue", "usage_retention_days"):
             if name in data:
                 setattr(self.server, name, int(data[name]))
         c = data.get("log_level")
@@ -335,7 +347,9 @@ class Config:
             self.server.port = int(v)
         if v := _env("W2A_HOST"):
             self.server.host = v
-        for name in ("rest_pool_size", "rest_pool_max_queue"):
+        if (v := _env('W2A_USAGE_DB_PATH')) is not None:
+            self.server.usage_db_path = v
+        for name in ("rest_pool_size", "rest_pool_max_queue", "usage_retention_days"):
             if (v := _env("W2A_" + name.upper())) is not None:
                 setattr(self.server, name, int(v))
         if v := _env("W2A_API_KEYS"):
@@ -411,6 +425,8 @@ class Config:
             "request_timeout": self.server.request_timeout,
             "rest_pool_size": self.server.rest_pool_size,
             "rest_pool_max_queue": self.server.rest_pool_max_queue,
+            "usage_db_path": self.server.usage_db_path,
+            "usage_retention_days": self.server.usage_retention_days,
             "log_level": self.log.level,
             "ensure_degraded_poll_interval_s": self.ensure.degraded_poll_interval_s,
             "ensure_degraded_poll_budget_s": self.ensure.degraded_poll_budget_s,

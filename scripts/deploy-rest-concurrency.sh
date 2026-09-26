@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 base() { docker compose -f compose.yaml "$@"; }
 desktop() { docker compose -f compose.yaml -f compose.headed.yaml "$@"; }
 desktop config --quiet
+mkdir -p data/usage
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup="data/deployment-backups/rest-concurrency-$stamp"
 mkdir -p "$backup"

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Dashboard remembered login — 2026-09-27
+
+- Default to remembering a verified service key in this browser for seven days, so refreshing the statistics page does not require re-entry. The option can be disabled; expiry, logout and rejected credentials clear the saved login. Temporary service failures preserve it, while unavailable browser storage falls back to page memory.
+- Clarified completed-attempt descriptions: successful replies show completion, while failed/cancelled attempts name the phase where they ended. Historical `reply` phases no longer look like currently waiting requests; live activity remains separate.
+
+### NAS usage dashboard — 2026-09-26
+
+- Added `/stats` and authenticated `/v1/stats` with key-scoped daily counts, outcomes, latency, body-byte totals, phase averages, current activity and recent attempts. A local, responsive page supports time ranges, status filtering and automatic refresh without external scripts.
+- SQLite records persist across restarts through the Compose `data/usage` mount, with configurable 90-day retention. Writes use a bounded queue and separate thread; storage failures do not fail chats. SSE errors and cancellations retain their true outcomes, while polling and unauthorized requests are excluded. See [scope and limitations](docs/USAGE-DASHBOARD.md).
+
+### NAS request progress — 2026-09-26
+
+- JSON and SSE chat callers can supply a per-attempt `progress_id` and poll an authenticated, API-key-scoped endpoint while waiting. It reports queueing, navigation, input, upload and reply stages without exposing chat content. Final diagnostics include cumulative phase timings. Existing chat response formats remain compatible; see the [caller integration guide](docs/REQUEST-PROGRESS.md).
+- Progress records are bounded, expire after completion and freeze on success, failure or cancellation. Duplicate IDs cannot replace an existing record or send a second chat. Gateways must filter stale-attempt updates and must not replay chats because a progress poll failed.
+
 ### NAS fork integration notes — 2026-09-25
 
 - REST chat errors advertise a bounded new-conversation replacement policy. The gateway may abandon an uncertain or confirmed attempt and retry once after the advertised delay, rebuilding context/images and rejecting late results. Ordinary HTTP/SDK replay stays disabled; task-wide budgeting and frontend ID replacement belong to the caller. See the [retry contract](docs/NEW-CONVERSATION-RETRY.md) and [fork changes](docs/NAS-FORK-CHANGES.md) for validation scope.

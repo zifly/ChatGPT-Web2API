@@ -8,7 +8,11 @@ Updated: 2026-09-25. Applies to this NAS fork. `192.168.1.100` and `NAS-HOST` ar
 
 **Replacement retries:** a gateway may abandon a failed attempt and retry once in a new conversation, including uncertain or confirmed submissions. Rebuild context/images and discard stale results; keep ordinary SDK replay disabled. See the [retry contract](docs/NEW-CONVERSATION-RETRY.md).
 
+**Live progress (2026-09-26):** JSON and SSE calls may include a fresh UUID as `progress_id` and poll `GET /v1/requests/{progress_id}` concurrently with the same API key. Show the current stage and elapsed time; final diagnostics also contain phase timings. See [frontend/gateway integration](docs/REQUEST-PROGRESS.md). Poll failures never justify replaying the chat.
+
 ## 1. Connection settings
+
+**Usage dashboard:** after updating the service, open `/stats` and authenticate with your service API key. Call history is persisted; progress polls do not increase chat counts. `/v1/stats` also exposes scoped summaries. See [metric definitions](docs/USAGE-DASHBOARD.md).
 
 | Setting | Value |
 |---|---|

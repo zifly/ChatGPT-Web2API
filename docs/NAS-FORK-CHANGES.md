@@ -99,3 +99,37 @@ Documentation examples use placeholder addresses, synthetic messages and generic
 ## 2026-09-25 Published fork integration / 合并已发布版本
 
 Integrated the existing fork history without replacing its commits. Retained its image-publication workflow, explicit Docker build inputs, optional Debian mirrors, desktop login/shutdown handling, stale Xvfb lock cleanup and earlier regression tests. Local private configuration remains excluded; `compose.image.yaml` requires an explicit image selection. The combined related suite passed 350 offline tests, and static checks passed for the affected application modules. These integration checks did not redeploy or send live chats.
+
+## 2026-09-26 Request progress / 等待阶段与耗时
+
+JSON/SSE 聊天可以传入每次尝试唯一的 `progress_id`，在原请求等待期间查询 `GET /v1/requests/{progress_id}`。阶段包括排队、打开会话、输入、上传、发送确认和等待回复。最终 `request_diagnostics` 同时增加阶段耗时；旧调用不必改为流式。README、双语接入手册、API 参考、并发和替换重试说明都链接到[项目端接入说明](REQUEST-PROGRESS.md)。此更新让等待过程可见，不宣称降低模型生成时间。
+
+Progress is scoped by the authenticated service API key, contains no prompt, image, reply or conversation ID, and never acquires a browser or sends a message. Existing header and query-key authentication remain compatible. The in-memory store holds at most 256 entries, retains completed snapshots for 300 seconds and releases live request state at completion. Duplicate IDs fail before browser mutation; callers retain per-attempt routing and ignore old progress after replacement retries.
+
+Related offline regressions passed across the full run and focused reruns (371 distinct cases). Coverage includes progress during blocked navigation/input/upload/reply, two concurrent requests and a cancelled waiter, JSON/SSE deadlines and cancellation, key isolation, legacy authentication, duplicate/invalid IDs, bounded retention and frozen timings. An older test that bypasses server construction now initializes the progress store. Static checks passed for the changed application modules and new tests.
+
+Deployment was initially deferred while the calling project imported data; idle checks prevented a busy-service restart. After the user confirmed work had stopped, NAS deployment and live progress acceptance completed on 2026-09-26 as recorded below. Caller-side progress display still requires integration.
+
+## 2026-09-26 Usage dashboard / 使用统计页面
+
+Added `/stats` and key-scoped `/v1/stats` reports for authenticated, completed REST chat attempts. The page displays today/7-day/30-day summaries, daily outcomes, mean/P95 latency, body bytes, current active/queued requests, phase averages and the latest 50 attempts. It supports status filtering, automatic refresh, login, empty data and read-failure states on desktop and narrow screens. Static assets have no external dependencies. Login persistence was extended on 2026-09-27 as recorded below.
+
+SQLite records use a persistent `data/usage` Compose mount and configurable retention (default 90 days). A bounded queue and one worker thread keep storage off the chat event loop. Storage failures report missing records without changing chat results. SSE errors are failures even with HTTP 200, cancellation is separate, and progress polling is excluded. Records contain no chat content, raw key, IP or conversation ID. Body bytes are not total browser traffic or token usage; gateway replacements count as separate attempts. See [definitions and limitations](USAGE-DASHBOARD.md).
+
+The related regression run passed 387 cases. Three additional cases cover compressed/chunked request bodies and same-clock-tick records; the complete 19-case statistics suite passed after the timestamp precision fix, with focused repeat runs confirming the earlier intermittent failure was resolved (390 distinct related cases overall). Static and JavaScript syntax checks passed. Local browser checks covered desktop/mobile layouts, time ranges, failed-record filtering, invalid/valid test keys, empty reports and simulated storage failure. Preview data is synthetic and isolated.
+
+## 2026-09-26 Progress and statistics deployment / 进度与统计部署验收
+
+After explicit deployment authorization and idle checks, the NAS received the application update while retaining its existing browser/system dependencies and private configuration. The prior image was tagged for rollback. Initial container startup exposed a missing `data/usage` bind source; creating that directory resolved it. Source/prebuilt installation instructions and the deployment helper now create the directory before startup.
+
+Both REST workers connected successfully. Dashboard HTML/JS/CSS, no-store responses, unauthenticated statistics rejection and authenticated statistics access passed. One new synthetic JSON chat returned its expected reply in 34.051 seconds; polling observed navigation, input, send-ready, send and reply stages. Terminal progress timings remained frozen. The report gained exactly one attempt with the verified 193 request-body bytes and 890 response-body bytes; progress/statistics polls added no calls. A separate read-only SQLite connection verified that record on disk and passed `quick_check`. There were no pending records, dropped records or write errors, and final health showed two connected, idle, unpaused workers.
+
+This live check validates the service-side JSON path; offline tests cover SSE, isolation, retention and storage failures. It does not establish caller-side progress rendering or a general latency improvement. Historical logs and local preview fixtures were not imported.
+
+## 2026-09-27 Remember dashboard login / 统计页记住登录
+
+The login form defaults to remembering a successfully verified key in browser local storage for a fixed seven days. Reloading and polling do not extend that expiry. Expiry, logout and HTTP 401 clear the saved key; storage events invalidate other remembered tabs without restoring late responses. Users can opt out, and blocked storage falls back to page memory with a notice. Network/storage-service failures do not erase an otherwise valid saved login. The service authentication rules and statistics database remain unchanged.
+
+Eight JavaScript behavior tests passed (`node --test tests/test_dashboard_auth.cjs`). Browser checks with a local test key verified remembered reload, logout followed by reload, and opting out. The three dashboard assets were updated in the running NAS container and its local deployment image; the container ID, start time and restart count stayed unchanged. Live HTTP responses matched the assets, and both REST workers remained connected. No chat messages were sent for this update.
+
+The recent-attempt table now labels terminal outcomes explicitly: completed replies, or the phase where failure/cancellation occurred. It also explains that in-flight work appears in the live counters. Browser verification covered all three outcomes, the login regressions still passed, and the updated assets were deployed without restarting the container. Existing records and API phase values were preserved.

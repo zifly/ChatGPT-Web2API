@@ -260,6 +260,7 @@ async def test_rest_auto_continue_invokes_ensure_current(monkeypatch):
     server._breakers = srv.BreakerRegistry()  # Phase 4 PR2: preflight reads this
     server._last_error = None
     server._browser_guard = srv.BrowserGuard()
+    server._progress = srv.RequestProgressStore()
     driver = MagicMock()
     driver._current_conv_id = "conv-rest-1"
     driver._current_model = None

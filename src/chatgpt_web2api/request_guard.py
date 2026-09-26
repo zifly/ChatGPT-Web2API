@@ -65,6 +65,35 @@ class RequestState:
     transport_uncertain: bool = False
     allow_preparation_recovery: bool = False
     worker: object = None
+    progress_id: str | None = None
+    finished_at: float | None = None
+    _phase_started_at: float = field(init=False, repr=False)
+    _phase_seconds: dict[str, float] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self):
+        self._phase_started_at = self.started_at
+
+    def set_phase(self, name):
+        if name != self.phase and self.finished_at is None:
+            now = time.monotonic()
+            self._phase_seconds[self.phase] = self._phase_seconds.get(self.phase, 0) + max(
+                0, now - self._phase_started_at)
+            self.phase = name
+            self._phase_started_at = now
+
+    def finish(self):
+        if self.finished_at is None:
+            self.finished_at = time.monotonic()
+
+    def timing(self):
+        now = self.finished_at if self.finished_at is not None else time.monotonic()
+        current = max(0, now - self._phase_started_at)
+        totals = dict(self._phase_seconds)
+        totals[self.phase] = totals.get(self.phase, 0) + current
+        return {'phase': self.phase,
+                'elapsed_seconds': round(max(0, now - self.started_at), 3),
+                'phase_elapsed_seconds': round(current, 3),
+                'phase_timings': {name: round(seconds, 3) for name, seconds in totals.items()}}
 
     def diagnostics(self, *, succeeded=False):
         reason = self.terminal_reason or 'non_recoverable'
@@ -77,11 +106,12 @@ class RequestState:
         elif self.deadline_expired or self.remaining() <= 0:
             reason = 'deadline_exceeded'
         return {'request_id': self.request_id,
+                **({'progress_id': self.progress_id} if self.progress_id else {}),
                 **({'browser_slot': self.worker.index} if self.worker is not None else {}),
                 'preparation_attempt_count': self.preparation_attempt_count,
                 'retry_count': len(self.retry_codes), 'retry_codes': self.retry_codes[:2],
                 'reply_recovery_attempt_count': self.reply_recovery_attempt_count,
-                'elapsed_seconds': round(time.monotonic() - self.started_at, 3),
+                **self.timing(),
                 'terminal_reason': reason}
 
     def remaining(self):
@@ -122,7 +152,7 @@ def phase(name):
     state = CURRENT_REQUEST.get()
     if state:
         state.check()
-        state.phase = name
+        state.set_phase(name)
 
 
 def send_attempted():
@@ -132,7 +162,7 @@ def send_attempted():
         if state.send_attempt_count:
             raise RuntimeError('A second submission attempt is forbidden for this request')
         state.send_attempt_count += 1
-        state.phase = 'send'
+        state.set_phase('send')
         state.send_state = 'unknown'
 
 

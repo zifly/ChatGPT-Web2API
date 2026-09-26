@@ -16,6 +16,8 @@ Based on [Octo-Lex/ChatGPT-Web2API](https://github.com/Octo-Lex/ChatGPT-Web2API)
 | Web citation sources | [引用来源与显示](docs/CITATIONS.md#中文) | [Citation sources and rendering](docs/CITATIONS.md#english) |
 | Timeouts and browser recovery | [超时与恢复](docs/REQUEST-RECOVERY.md#中文) | [Request deadlines and recovery](docs/REQUEST-RECOVERY.md#english) |
 | Retry after abandoning a conversation | [新会话重试约定](docs/NEW-CONVERSATION-RETRY.md) | [Replacement retry](docs/NEW-CONVERSATION-RETRY.md#english) |
+| Request progress and stage timings | [实时进度与阶段耗时](docs/REQUEST-PROGRESS.md) | [Request progress](docs/REQUEST-PROGRESS.md#english) |
+| Usage dashboard | [使用统计页面](docs/USAGE-DASHBOARD.md) | [Usage dashboard](docs/USAGE-DASHBOARD.md#english) |
 
 ## What this fork changes / 修改内容
 
@@ -34,11 +36,17 @@ The core API/MCP implementation, browser automation and turn-correlation machine
 - **Timeout recovery:** transient read timeouts stay within the original reply deadline and do not replay the send. Upload timeouts include sanitized phase/state diagnostics; non-streaming errors distinguish `image_upload_timeout` (not sent) from `reply_timeout` (inspect the submission state).
 - **Request deadline and browser pause:** REST queueing, navigation, upload and reply reading share one deadline. Errors distinguish confirmed, absent and uncertain submissions. Repeated CDP timeouts pause browser operations; an authenticated read-only recovery probe can unpause them without replaying a request. See [recovery behavior](docs/REQUEST-RECOVERY.md).
 - **Replacement retries:** chat errors advertise `new_conversation_retry`. A gateway may abandon a failed attempt and retry once in a fresh chat, rebuilding context/images and rejecting late results. The gateway enforces the task-wide budget; ordinary SDK replay stays disabled. See [retry requirements](docs/NEW-CONVERSATION-RETRY.md).
+- **Request progress:** JSON and SSE callers can opt in with a unique `progress_id` and poll an authenticated endpoint while the chat is waiting. Clients can display queueing, navigation, input, upload and reply stages; final diagnostics include per-stage timings. Progress contains no chat content and is scoped by API key. See [integration requirements](docs/REQUEST-PROGRESS.md).
+- **Usage dashboard:** `/stats` shows key-scoped call history, success rates, latency, phase timings and request/response body bytes. SQLite history survives container replacement through a persistent mount, with 90-day default retention. Polls are excluded and SSE errors count as failures. See [counting rules and setup](docs/USAGE-DASHBOARD.md).
 - **Backend-only reply mode:** `W2A_REPLY_SOURCE=backend` skips assistant DOM text and DOM completion detection. It polls the authenticated webpage conversation endpoint and returns only a completed reply matched to the current turn. Unresolved IDs, ambiguous/partial replies and deadlines fail explicitly; this mode never falls back to page text.
 
 我们修复的是采集层的丢字、重复和错误拼接，不是通过补括号或猜测 ID 修复 JSON。模型本身仍可能生成格式不合要求或语义错误的内容，调用方需要校验。
 
 **前端兼容重点：** 成功响应格式保持兼容，但池模式下不传 `conversation_id` 就会新建会话。前端需为每个业务会话分别保存 ID、阻止重复提交，并将回复写回发起请求的会话。依赖隐式续聊或全局共用一个 ID 的实现，须按[迁移清单](docs/REST-CONCURRENCY.md)调整。
+
+**等待时显示进度：** 为每次尝试传入新的 `progress_id`，原聊天请求进行期间每秒查询 `GET /v1/requests/{progress_id}`，即可显示当前阶段和等待秒数，无需改用流式回答。阶段耗时也会随最终结果返回，见[项目端接入说明](docs/REQUEST-PROGRESS.md)。
+
+**查看使用统计：** 更新服务后打开 `/stats`，输入服务 API Key，即可查看今日、近 7 天、近 30 天的调用趋势和最近记录。默认在当前浏览器记住登录 7 天，刷新无需重复输入；可取消勾选，退出会清除保存的 Key。历史从启用时开始保存，接口流量按正文大小计量，真实 Token 用量仍不可得；详见[统计页面说明](docs/USAGE-DASHBOARD.md)。
 
 **允许新会话重试：** 超时、5xx 或 429 冷却结束后，网关可放弃旧尝试，在全新会话自动重试一次，包括原请求已发送或发送状态不确定的情况。旧结果必须丢弃，必要上下文和图片由业务侧重建；成功后保存新会话 ID。普通 SDK 原样重试保持关闭，400/401 等其他 4xx 和用户取消不自动重试。错误中的 `new_conversation_retry` 是策略提示，整个业务任务的一次重试上限由网关执行；详见[重试流程与前端要求](docs/NEW-CONVERSATION-RETRY.md)。放弃旧尝试不会删除聊天记录，也不保证旧生成已经停止。
 
